@@ -186,8 +186,8 @@ export async function main(ns) {
     xpOnly = options.x || options['xp-only'];
     stockMode = options.s || options['stock-manipulation'] || options['stock-manipulation-focus'];
     stockFocus = options['stock-manipulation-focus'];
-    useHacknetNodes = options.n || options['run-once'];
-    verbose = options.v || options.verbose;
+    useHacknetNodes = options.n || options['use-hacknet-nodes'];
+    verbose = options.v || options['verbose'];
     runOnce = options.o || options['run-once'];
     loopingMode = options['looping-mode'];
     recoveryThreadPadding = options['recovery-thread-padding'];
@@ -196,7 +196,7 @@ export async function main(ns) {
     if (xpOnly) log('-x - Hack XP Grinding mode activated!');
     if (stockMode) log('-s - Stock market manipulation mode activated!');
     if (stockFocus) log('--stock-manipulation-focus - Stock market manipulation is the main priority');
-    if (xpOnly) log('-n - Using hacknet nodes to run scripts!');
+    if (useHacknetNodes) log('-n - Using hacknet nodes to run scripts!');
     if (verbose) log('-v - Verbose logging activated!');
     if (runOnce) log('-o - Run-once mode activated!');
     if (loopingMode) {
@@ -257,7 +257,7 @@ export async function main(ns) {
     if (playerHackSkill() < 3000 && !xpOnly)
         await kickstartHackXp(ns, 0.5, verbose, 1); // Fire a hack XP cycle using a chunk of free RAM
     if (stockFocus)
-        maxTargets = serverStockSymbols.length; // Ensure we immediately attempt to target all servers that represent stocks
+        maxTargets = Object.keys(serverStockSymbols).length; // Ensure we immediately attempt to target all servers that represent stocks
     if (stockMode && !playerStats.hasTixApiAccess)
         log("WARNING: Ran with '--stock-manipulation' flag, but this will have no effect until you buy access to the stock market API then restart or manually run stockmaster.js");
 
