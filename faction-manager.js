@@ -84,6 +84,12 @@ export async function main(ns) {
     const sort = unshorten(options.sort); // Support the user leaving off the _mult suffix
     playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt');
     const ownedSourceFiles = await getActiveSourceFiles(ns);
+    const sf4Level = ownedSourceFiles[4] || 0;
+    if (sf4Level == 0)
+        log(ns, `WARNING: This script makes heavy use of singularity functions. Without SF4, you're unlikely to get it working.`);
+    else if (sf4Level < 3)
+        log(ns, `WARNING: This script makes heavy use of singularity functions, which are quite expensive before you have SF4.3. ` +
+            `Unless you have a lot of free RAM for temporary scripts, you may get runtime errors.`);
     const sf11Level = ownedSourceFiles[11] || 0;
     augCountMult = [1.9, 1.824, 1.786, 1.767][sf11Level];
     log(ns, `Player has sf11Level ${sf11Level}, so the multiplier after each aug purchased is ${augCountMult}.`);
@@ -157,8 +163,8 @@ async function updateFactionData(ns, allFactions, factionsToOmit) {
     let dictFactionFavors = await getNsDataThroughFile(ns, factionsDictCommand('ns.getFactionFavor(faction)'), '/Temp/faction-favor.txt');
 
     // Need information about our gang to work around a TRP bug - gang faction appears to have it available, but it's not    
-    const gangFaction = await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation().faction : false', '/Temp/gang-stats.txt');
-    if (gangFaction) dictFactionAugs[gangFaction] = dictFactionAugs[gangFaction].filter(a => a != "The Red Pill");
+    const gangFaction = await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation().faction : false', '/Temp/gang-faction.txt');
+    if (gangFaction) dictFactionAugs[gangFaction] = dictFactionAugs[gangFaction]?.filter(a => a != "The Red Pill");
 
     factionData = Object.fromEntries(factionNames.map(faction => [faction, {
         name: faction,
@@ -166,7 +172,7 @@ async function updateFactionData(ns, allFactions, factionsToOmit) {
         joined: joinedFactions.includes(faction),
         reputation: dictFactionReps[faction] || 0,
         favor: dictFactionFavors[faction],
-        donationsUnlocked: dictFactionFavors[faction] >= ns.getFavorToDonate(),
+        donationsUnlocked: dictFactionFavors[faction] >= ns.getFavorToDonate() && faction !== gangFaction, // Can't donate to gang factions for rep
         augmentations: dictFactionAugs[faction],
         unownedAugmentations: function (includeNf = false) { return this.augmentations.filter(aug => !ownedAugmentations.includes(aug) && (aug != strNF || includeNf)) },
         mostExpensiveAugCost: function () { return this.augmentations.map(augName => augmentationData[augName]).reduce((max, aug) => Math.max(max, aug.price), 0) },
@@ -405,9 +411,9 @@ async function manageFilteredSubset(ns, outputRows, subsetName, subset, printLis
             const factionsWithAugAndInvite = factionsWithAug.filter(f => f.invited || f.joined).sort((a, b) => b.favor - a.favor);
             const factionWithMostFavor = factionsWithAugAndInvite[0] ?? factionsWithAug[0];
             if (getFrom != factionsWithAug[0].name && factionsWithAug[0] != factionsWithAugAndInvite[0])
-                outputRows.push(`Suggested that you earn an invitation to faction ${factionsWithAug[0].name} to make it easier to get rep for ${strNF} since it has the most favor (${factionsWithAug[0].favor}).`);
+                outputRows.push(`SUGGESTION: Earn an invitation to faction ${factionsWithAug[0].name} to make it easier to get rep for ${strNF} since it has the most favor (${factionsWithAug[0].favor}).`);
             else if (factionsWithAug[0].joined && !factionsWithAug[0].donationsUnlocked)
-                outputRows.push(`Suggested that you do some work for faction ${factionsWithAug[0].name} to qickly earn rep for ${strNF} since it has the most favor (${factionsWithAug[0].favor}).`);
+                outputRows.push(`SUGGESTION: Do some work for faction ${factionsWithAug[0].name} to qickly earn rep for ${strNF} since it has the most favor (${factionsWithAug[0].favor}).`);
             else if ((!getFrom || factionData[getFrom].favor < factionWithMostFavor.favor) && factionWithMostFavor.invited) {
                 outputRows.push(`Attempting to join faction ${factionWithMostFavor.name} to make it easier to get rep for ${strNF} since it has the most favor (${factionWithMostFavor.favor}).`);
                 options['force-join'].push(factionWithMostFavor.name);
@@ -420,7 +426,8 @@ async function manageFilteredSubset(ns, outputRows, subsetName, subset, printLis
         }
         let nfPurchased = purchaseableAugs.filter(a => a.name === augNf.name).length;
         const augNfFaction = factionData[augNf.getFromJoined()];
-        while (nfPurchased < 200) {
+        log(ns, `nfPurchased: ${nfPurchased}, augNfFaction: ${augNfFaction.name} (rep: ${augNfFaction.reputation}), augNf.price: ${augNf.price}, augNf.reputation: ${augNf.reputation}`);
+        while (nfPurchased < 50) {
             const nextNfCost = augNf.price * (augCountMult ** purchaseableAugs.length) * (nfCountMult ** nfPurchased);
             const nextNfRep = augNf.reputation * (nfCountMult ** nfPurchased);
             let nfMsg = `Cost of NF ${nfPurchased + 1} is ${formatMoney(nextNfCost)} and will require ${formatNumberShort(nextNfRep)} reputation`
@@ -429,7 +436,7 @@ async function manageFilteredSubset(ns, outputRows, subsetName, subset, printLis
             totalAugCost += nextNfCost;
             if (nextNfRep > augNfFaction.reputation) {
                 if (augNfFaction.donationsUnlocked) {
-                    purchaseFactionDonations[augNfFaction.name] = Math.max(purchaseFactionDonations[augNfFaction.name], getReqDonationForRep(nextNfRep, augNfFaction));
+                    purchaseFactionDonations[augNfFaction.name] = Math.max(purchaseFactionDonations[augNfFaction.name] || 0, getReqDonationForRep(nextNfRep, augNfFaction));
                     totalRepCost = Object.values(purchaseFactionDonations).reduce((t, r) => t + r, 0);
                     nfMsg += `, which will require a donation of ${formatMoney(purchaseFactionDonations[augNfFaction.name])} to faction ${augNfFaction.name}`
                 } else {

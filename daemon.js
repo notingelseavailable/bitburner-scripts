@@ -58,6 +58,7 @@ let portCrackers = [];
 // toolkit var for remembering the names and costs of the scripts we use the most
 let tools = [];
 let toolsByShortName = []; // Dictionary keyed by tool short name
+let allHelpersRunning = false; // Tracks whether all long-lived helper scripts have been launched
 
 // Command line Flags
 let hackOnly = false; // "-h" command line arg - don't grow or shrink, just hack (a.k.a. scrapping mode)
@@ -215,11 +216,14 @@ export async function main(ns) {
     asynchronousHelpers = [
         { name: "stats.js", shouldRun: () => ns.getServerMaxRam("home") >= 64 /* Don't waste precious RAM */ }, // Adds stats not usually in the HUD
         { name: "hacknet-upgrade-manager.js", args: ["-c", "--max-payoff-time", "1h"] }, // Kickstart hash income by buying everything with up to 1h payoff time immediately
-        { name: "stockmaster.js", tail: true, shouldRun: () => playerStats.hasTixApiAccess, args: ["--show-market-summary"] }, // Start our stockmaster if we have the required stockmarket access
+        { name: "stockmaster.js", args: ["--show-market-summary"], tail: true, shouldRun: () => playerStats.hasTixApiAccess }, // Start our stockmaster if we have the required stockmarket access
         { name: "gangs.js", tail: true, shouldRun: () => 2 in dictSourceFiles }, // Script to create manage our gang for us
-        { name: "work-for-factions.js", shouldRun: () => 4 in dictSourceFiles, args: ['--fast-crimes-only', '--no-coding-contracts'] }, // Script to manage how we use our "focus" work
-        { name: "spend-hacknet-hashes.js", shouldRun: () => 9 in dictSourceFiles, args: ["-v"] }, // Always have this running to make sure hashes aren't wasted
+        { name: "spend-hacknet-hashes.js", args: ["-v"], shouldRun: () => 9 in dictSourceFiles }, // Always have this running to make sure hashes aren't wasted
         { name: "sleeve.js", tail: true, shouldRun: () => 10 in dictSourceFiles }, // Script to create manage our sleeves for us
+        {
+            name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
+            shouldRun: () => 4 in dictSourceFiles && (ns.getServerMaxRam("home") >= 128 / (2 ** dictSourceFiles[4])) // Higher SF4 levels result in lower RAM requirements
+        },
     ];
     asynchronousHelpers.forEach(helper => helper.isLaunched = false);
     asynchronousHelpers.forEach(helper => helper.requiredServer = "home"); // All helpers should be launched at home since they use tempory scripts, and we only reserve ram on home
@@ -234,7 +238,11 @@ export async function main(ns) {
         { interval: 32000, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "4h", "--max-spend", ns.getServerMoneyAvailable("home") * 0.1] },
         { interval: 33000, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "8h", "--max-spend", ns.getServerMoneyAvailable("home") * 0.01] },
         // Don't start auto-joining factions until we're holding 1 billion (so coding contracts returning money is probably less critical) or we've joined one already
-        { interval: 34000, name: "faction-manager.js", requiredServer: "home", args: ['--join-only'], shouldRun: () => 4 in dictSourceFiles && (playerStats.factions.length > 0 || ns.getServerMoneyAvailable("home") > 1e9) },
+        {
+            interval: 34000, name: "faction-manager.js", requiredServer: "home", args: ['--join-only'],
+            shouldRun: () => 4 in dictSourceFiles && (playerStats.factions.length > 0 || ns.getServerMoneyAvailable("home") > 1e9) &&
+                (ns.getServerMaxRam("home") >= 128 / (2 ** dictSourceFiles[4])) // Uses singularity functions, and higher SF4 levels result in lower RAM requirements
+        },
         { interval: 51000, name: "/Tasks/contractor.js", requiredServer: "home" },
         { interval: 110000, name: "/Tasks/backdoor-all-servers.js", requiredServer: "home", shouldRun: () => 4 in dictSourceFiles },
         { interval: 111000, name: "host-manager.js", requiredServer: "home", shouldRun: () => !shouldReserveMoney() },
@@ -252,8 +260,7 @@ export async function main(ns) {
     buildPortCrackingArray(ns); // build port cracking array  
     await establishMultipliers(ns); // figure out the various bitnode and player multipliers
 
-    if (!hackOnly)
-        await runStartupScripts(ns); // Start helper scripts
+    allHelpersRunning = hackOnly ? true : await runStartupScripts(ns); // Start helper scripts
     if (playerHackSkill() < 3000 && !xpOnly)
         await kickstartHackXp(ns, 0.5, verbose, 1); // Fire a hack XP cycle using a chunk of free RAM
     if (stockFocus)
@@ -276,8 +283,8 @@ function whichServerIsRunning(ns, scriptName, canUseCache = true) {
 }
 
 // Helper to kick off helper scripts
+/** @param {NS} ns **/
 async function runStartupScripts(ns) {
-    log("runStartupScripts");
     for (const helper of asynchronousHelpers)
         if (!helper.isLaunched && (helper.shouldRun === undefined || helper.shouldRun()))
             helper.isLaunched = await tryRunTool(ns, getTool(helper))
@@ -285,9 +292,9 @@ async function runStartupScripts(ns) {
     return asynchronousHelpers.reduce((allLaunched, tool) => allLaunched && tool.isLaunched, true);
 }
 
-// Checks whether it's time for any scheduled tasks to run
 /** @param {NS} ns **/
 async function runPeriodicScripts(ns) {
+    // Checks whether it's time for any scheduled tasks to run
     for (const task of periodicScripts) {
         let tool = getTool(task);
         if ((Date.now() - (task.lastRun || 0) >= task.interval) && (task.shouldRun === undefined || task.shouldRun())) {
@@ -295,10 +302,8 @@ async function runPeriodicScripts(ns) {
             await tryRunTool(ns, tool);
         }
     }
-    // A couple other quick tasks
-    let playerMoney = ns.getServerMoneyAvailable("home");
-    // Super-early aug, if we are poor, spend hashes as soon as we get them for a quick cash injection:
-    if (playerMoney < 10000000) {
+    // Super-early aug, if we are poor, spend hashes as soon as we get them for a quick cash injection. (Only applies if we have hacknet servers)
+    if (9 in dictSourceFiles && ns.getServerMoneyAvailable("home") < 10000000 && (ns.getServerMaxRam("home") - ns.getServerUsedRam("home")) >= 5.6) {
         await runCommand(ns, `0; if(ns.hacknet.spendHashes("Sell for Money")) ns.toast('Sold 4 hashes for \$1M', 'success')`, '/Temp/sell-hashes-for-money.js');
     }
 }
@@ -345,16 +350,19 @@ async function doTargetingLoop(ns) {
             psCache = []; // Clear the cache of the process list we update once per loop           
             buildServerList(ns, true); // Check if any new servers have been purchased by the external host_manager process           
             updatePlayerStats(); // Update player info
-            // run some auxilliary processes that ease the ram burden of this daemon and add additional functionality (like managing hacknet or buying servers)
-            //if (!isHelperListLaunched) isHelperListLaunched = await runStartupScripts(ns);
+            // Run some auxilliary processes that ease the ram burden of this daemon and add additional functionality (like managing hacknet or buying servers)
             await runPeriodicScripts(ns);
 
             if (stockMode) await updateStockPositions(ns); // In stock market manipulation mode, get our current position in all stocks
             sortServerList("targeting"); // Update the order in which we ought to target servers
 
             if (loops % 60 == 0) { // For more expensive updates, only do these every so often
+                // If we have not yet launched all helpers (e.g. awaiting more home ram, or TIX API to be purchased) see if any are now ready to be run
+                if (!allHelpersRunning) allHelpersRunning = await runStartupScripts(ns);
+                // Pull additional data about servers that infrequently changes
                 await refreshDynamicServerData(ns, addedServerNames);
-                if (verbose && loops % 600 == 0) // Occassionally print our current targetting order (todo, make this controllable with a flag or custom UI?)
+                // Occassionally print our current targetting order (todo, make this controllable with a flag or custom UI?)
+                if (verbose && loops % 600 == 0)
                     log('Targetting Order:\n  ' + serverListByTargetOrder.filter(s => s.shouldHack()).map(s =>
                         `${s.isPrepped() ? '*' : ' '} ${s.canHack() ? '✓' : 'X'} Money: ${formatMoney(s.getMoney(), 4)} of ${formatMoney(s.getMaxMoney(), 4)} ` +
                         `(${formatMoney(s.getMoneyPerRamSecond(), 4)}/ram.sec), Sec: ${formatNumber(s.getSecurity(), 3)} of ${formatNumber(s.getMinSecurity(), 3)}, ` +
@@ -1108,7 +1116,7 @@ export async function arbitraryExecution(ns, tool, threads, args, preferredServe
             // Some tools require helpers.js
             if (!doesFileExist('helpers.js', targetServer.name))
                 await ns.scp('helpers.js', daemonHost, targetServer.name);
-
+            await ns.sleep(5); // Workaround for Bitburner bug https://github.com/danielyxie/bitburner/issues/1714 - newly created/copied files sometimes need a bit more time, even if awaited
         }
         let pid = ns.exec(tool.name, targetServer.name, maxThreadsHere, ...(args || []));
         // A pid of 0 indicates that the run failed
