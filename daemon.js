@@ -39,13 +39,13 @@ const maxLoopTime = 1000; //ms
 let loopInterval = 1000; //ms
 // the number of milliseconds to delay the grow execution after theft to ensure it doesn't trigger too early and have no effect.
 // For timing reasons the delay between each step should be *close* 1/4th of this number, but there is some imprecision
-let cycleTimingDelay = 1600;
-let queueDelay = 100; // the delay that it can take for a script to start, used to pessimistically schedule things in advance
-let maxBatches = 40; // the max number of batches this daemon will spool up to avoid running out of IRL ram (TODO: Stop wasting RAM by scheduling batches so far in advance. e.g. Grind XP while waiting for cycle start!)
-let maxTargets; // Initial value, will grow if there is an abundance of RAM
+let cycleTimingDelay; // (Set in command line args)
+let queueDelay; // (Set in command line args) The delay that it can take for a script to start, used to pessimistically schedule things in advance
+let maxBatches; // (Set in command line args) The max number of batches this daemon will spool up to avoid running out of IRL ram (TODO: Stop wasting RAM by scheduling batches so far in advance. e.g. Grind XP while waiting for cycle start!)
+let maxTargets; // (Set in command line args) Initial value, will grow if there is an abundance of RAM
 let maxPreppingAtMaxTargets = 3; // The max servers we can prep when we're at our current max targets and have spare RAM
 // Allows some home ram to be reserved for ad-hoc terminal script running and when home is explicitly set as the "preferred server" for starting a helper 
-let homeReservedRam = 32;
+let homeReservedRam; // (Set in command line args)
 
 // --- VARS ---
 // some ancillary scripts that run asynchronously, we utilize the startup/execute capabilities of this daemon to run when able
@@ -90,6 +90,7 @@ let lastUpdateTime = Date.now();
 let lowUtilizationIterations = 0;
 let highUtilizationIterations = 0;
 let lastShareTime = 0; // Tracks when share was last invoked so we can respect the configured share-cooldown
+let allTargetsPrepped = false;
 
 // Replacements / wrappers for various NS calls to let us keep track of them in one place and consolidate where possible
 let log = (...args) => logHelper(_ns, ...args);
@@ -151,7 +152,7 @@ const argsSchema = [
     ['share', false], // Enable sharing free ram to increase faction rep gain (enabled automatically once RAM is sufficient)
     ['no-share', false], // Disable sharing free ram to increase faction rep gain
     ['share-cooldown', 5000], // Wait before attempting to schedule more share threads (e.g. to free RAM to be freed for hack batch scheduling first)
-    ['share-max-utilization', 0.9], // Set to 1 if you don't care to leave any RAM free after sharing. Will use up to this much of the available RAM
+    ['share-max-utilization', 0.8], // Set to 1 if you don't care to leave any RAM free after sharing. Will use up to this much of the available RAM
 ];
 
 export function autocomplete(data, args) {
@@ -477,7 +478,7 @@ async function doTargetingLoop(ns) {
                 }
 
                 // Hack: Quickly ramp up our max-targets without waiting for the next loop if we are far below the low-utilization threshold
-                if (lowUtilizationIterations >= 5 && targeting.length == maxTargets) {
+                if (lowUtilizationIterations >= 5 && targeting.length == maxTargets && maxTargets < serverListByTargetOrder.length - noMoney.length) {
                     let network = getNetworkStats();
                     let utilizationPercent = network.totalUsedRam / network.totalMaxRam;
                     if (utilizationPercent < lowUtilizationThreshold / 2) maxTargets++;
@@ -521,7 +522,7 @@ async function doTargetingLoop(ns) {
             let intervalsPerTargetCycle = targeting.length == 0 ? 120 :
                 Math.ceil((targeting.reduce((max, t) => Math.max(max, t.timeToWeaken()), 0) + cycleTimingDelay) / loopInterval);
             //log(`intervalsPerTargetCycle: ${intervalsPerTargetCycle} lowUtilizationIterations: ${lowUtilizationIterations} loopInterval: ${loopInterval}`);
-            if (lowUtilizationIterations > intervalsPerTargetCycle && skipped.length > 0 && maxTargets < serverListByTargetOrder.length) {
+            if (lowUtilizationIterations > intervalsPerTargetCycle && skipped.length > 0) {
                 maxTargets++;
                 log(`Increased max targets to ${maxTargets} since utilization (${formatNumber(utilizationPercent * 100, 3)}%) has been quite low for ${lowUtilizationIterations} iterations.`);
                 lowUtilizationIterations = 0; // Reset the counter of low-utilization iterations
@@ -531,6 +532,7 @@ async function doTargetingLoop(ns) {
                 highUtilizationIterations = 0; // Reset the counter of high-utilization iterations
             }
             maxTargets = Math.max(maxTargets, targeting.length - 1, 1); // Ensure that after a restart, maxTargets start off with no less than 1 fewer max targets
+            allTargetsPrepped = skipped.length == 0 && prepping.length == 0;
 
             // If there is still unspent utilization, we can use a chunk of it it to farm XP
             if (xpOnly) { // If all we want to do is gain hack XP
@@ -952,12 +954,7 @@ async function performScheduling(ns, currentTarget, snapshot) {
             const discriminationArg = `Batch ${schedObj.batchNumber}-${schedItem.description}`;
             // Args spec: [0: Target, 1: DesiredStartTime (used to delay tool start), 2: ExpectedEndTime (informational), 3: Duration (informational), 4: DoStockManipulation, 5: DisableWarnings]
             const args = [currentTarget.name, schedItem.start.getTime(), schedItem.end.getTime(), schedItem.end - schedItem.start, discriminationArg];
-            if (["hack", "grow"].includes(schedItem.toolShortName)) // Push an arg used by remote hack/grow tools to determine whether it should manipulate the stock market
-                args.push(stockMode && (schedItem.toolShortName == "hack" && shouldManipulateHack[currentTarget.name] || schedItem.toolShortName == "grow" && shouldManipulateGrow[currentTarget.name]) ? 1 : 0);
-            if (["hack", "weak"].includes(schedItem.toolShortName))
-                args.push(options['silent-misfires'] || // Optional arg to disable toast warnings about a failed hack if hacking money gain is disabled
-                    (schedItem.toolShortName == "hack" && (bitnodeMults.ScriptHackMoneyGain == 0 || playerStats.bitNodeN == 8)) ? 1 : 0); // Disable automatically in BN8 (hack income disabled)
-            args.push(loopingMode ? 1 : 0); // Argument to indicate whether the cycle should loop perpetually
+            args.push(...getFlagsArgs(schedItem.toolShortName, currentTarget.name));
             if (recoveryThreadPadding > 1 && ["weak", "grow"].includes(schedItem.toolShortName))
                 schedItem.threadsNeeded *= recoveryThreadPadding; // Only need to pad grow/weaken threads
             if (options.i && currentTerminalServer?.name == currentTarget.name && schedItem.toolShortName == "hack")
@@ -974,6 +971,18 @@ async function performScheduling(ns, currentTarget, snapshot) {
         log(`Scheduled ${cyclesScheduled} x ${getTargetSummary(currentTarget)} Took: ${Date.now() - start}ms`);
     currentTarget.previousCycle = `${cyclesScheduled} x ${getTargetSummary(currentTarget)}`
     return true;
+}
+
+/** Produce additional args based on the hack tool name and command line flags set */
+function getFlagsArgs(toolName, target, allowLooping = true) {
+    const args = []
+    if (["hack", "grow"].includes(toolName)) // Push an arg used by remote hack/grow tools to determine whether it should manipulate the stock market
+        args.push(stockMode && (toolName == "hack" && shouldManipulateHack[target] || toolName == "grow" && shouldManipulateGrow[target]) ? 1 : 0);
+    if (["hack", "weak"].includes(toolName))
+        args.push(options['silent-misfires'] || // Optional arg to disable toast warnings about a failed hack if hacking money gain is disabled
+            (toolName == "hack" && (bitnodeMults.ScriptHackMoneyGain == 0 || playerStats.bitNodeN == 8)) ? 1 : 0); // Disable automatically in BN8 (hack income disabled)
+    args.push(allowLooping && loopingMode ? 1 : 0); // Argument to indicate whether the cycle should loop perpetually
+    return args;
 }
 
 // returns an object that contains all 4 timed events start and end times as dates
@@ -1090,7 +1099,7 @@ export async function arbitraryExecution(ns, tool, threads, args, preferredServe
 
     // Sort servers by total ram, and try to fill these before utilizing another server.
     sortServerList("totalram");
-    var preferredServerOrder = serverListByMaxRam.filter(server => server.hasRoot() && server.totalRam() > 1.6);
+    var preferredServerOrder = serverListByMaxRam.filter(server => server.hasRoot() && server.totalRam() > 1.6 || server.name == "home");
     if (useSmallestServerPossible) // Fill up small servers before utilizing larger ones (can be laggy)
         preferredServerOrder.reverse();
     // IDEA: "home" is more effective at grow() and weaken() than other nodes (has multiple cores) (TODO: By how much?)
@@ -1186,7 +1195,7 @@ export async function arbitraryExecution(ns, tool, threads, args, preferredServe
     }
     // The run failed if there were threads left to schedule after we exhausted our pool of servers
     if (remainingThreads > 0 && threads < Number.MAX_SAFE_INTEGER)
-        log(`ERROR: Ran out of RAM to run ${tool.name} ${splitThreads ? '' : `on ${targetServer.name} `}- ${threads - remainingThreads} of ${threads} threads were spawned.`, false, 'error');
+        log(`ERROR: Ran out of RAM to run ${tool.name} ${splitThreads ? '' : `on ${targetServer?.name} `}- ${threads - remainingThreads} of ${threads} threads were spawned.`, false, 'error');
     if (splitThreads && !tool.isThreadSpreadingAllowed)
         return false;
     return remainingThreads == 0;
@@ -1255,7 +1264,7 @@ let lastCycleTotalRam = 0; // Cache of total ram on the server to check whether 
 /** @param {NS} ns 
  * Gain a bunch of hack XP early after a new Augmentation by filling a bunch of RAM with weaken() against a relatively easy target */
 async function kickstartHackXp(ns, percentOfFreeRamToConsume = 1, verbose = false, targets = undefined) {
-    if (!xpOnly)
+    if (!xpOnly && !loopingMode)
         return await scheduleHackExpCycle(ns, getXPFarmServer(), percentOfFreeRamToConsume, verbose, false); // Grind some XP from the single best target for farming XP
     // Otherwise, target multiple servers until we can't schedule any more. Each next best target should get the next best (biggest) server
     sortServerList("totalram");
@@ -1282,7 +1291,7 @@ async function kickstartHackXp(ns, percentOfFreeRamToConsume = 1, verbose = fals
     for (let i = 0; i < targets; i++) {
         let lastSchedulingResult;
         singleServerMode = singleServerMode || (i >= (jobHosts.length - 1 - singleServerLimit) || jobHosts[i + 1].totalRam() < 1000); // Switch to single-server mode if running out of hosts with high ram
-        etas.push(lastSchedulingResult = (await scheduleHackExpCycle(ns, targetsByExp[i], 1, verbose, tryAdvanceMode, jobHosts[i], singleServerMode)) || Number.MAX_SAFE_INTEGER);
+        etas.push(lastSchedulingResult = (await scheduleHackExpCycle(ns, targetsByExp[i], percentOfFreeRamToConsume, verbose, tryAdvanceMode, jobHosts[i], singleServerMode)) || Number.MAX_SAFE_INTEGER);
         if (lastSchedulingResult == Number.MAX_SAFE_INTEGER) break; // Stop scheduling targets if the last attempt failed
     }
     // TODO: waitForCycleEnd - if any targets are within 200ms? (one game tick) of the end of their cycle, wait for it to end and trigger the next cycle immediately?
@@ -1331,11 +1340,16 @@ async function scheduleHackExpCycle(ns, server, percentOfFreeRamToConsume, verbo
             expTool = getTool("grow");
             expTime = server.timeToGrow();
         }
+        let loopRunning = false;
         if (server.isXpFarming()) {
-            if (verbose && activeCycleTimeLeft < -50) // Warn about big misfires (sign of lag)
-                log(`WARNING: ${server.name} FarmXP process is ` + (eta ? `more than ${formatDuration(-activeCycleTimeLeft)} overdue...` :
-                    `still in progress from a prior run. ETA unknown, assuming '${expTool.name}' time: ${formatDuration(expTime)}`));
-            return eta ? (activeCycleTimeLeft > 0 ? activeCycleTimeLeft : 10 /* If we're overdue, sleep only 10 ms before checking again */) : expTime /* Have no ETA, sleep for expTime */;
+            if (loopingMode)
+                loopRunning = true;
+            else {
+                if (verbose && activeCycleTimeLeft < -50) // Warn about big misfires (sign of lag)
+                    log(`WARNING: ${server.name} FarmXP process is ` + (eta ? `more than ${formatDuration(-activeCycleTimeLeft)} overdue...` :
+                        `still in progress from a prior run. ETA unknown, assuming '${expTool.name}' time: ${formatDuration(expTime)}`));
+                return eta ? (activeCycleTimeLeft > 0 ? activeCycleTimeLeft : 10 /* If we're overdue, sleep only 10 ms before checking again */) : expTime /* Have no ETA, sleep for expTime */;
+            }
         }
         let threads = Math.floor(((allocatedServer == null ? expTool.getMaxThreads() : allocatedServer.ramAvailable() / expTool.cost) * percentOfFreeRamToConsume).toPrecision(14));
         if (threads == 0)
@@ -1366,15 +1380,20 @@ async function scheduleHackExpCycle(ns, server, percentOfFreeRamToConsume, verbo
         let scheduleTime = now + scheduleDelay;
         let cycleTime = scheduleDelay + expTime + 10; // Wake up this long after a hack has fired (to ensure we don't wake up too early)
         nextXpCycleEnd[server.name] = now + cycleTime; // Store when this server's next cycle is expected to end
+        const allowLoop = advancedMode && singleServer && allTargetsPrepped; // Allow looping mode only once all targets are prepped
         // Schedule the FarmXP threads first, ensuring that they are not split (if they our split, our hack threads above 'effectiveHackThreads' lose their free ride)
-        let success = await arbitraryExecution(ns, expTool, threads, [server.name, scheduleTime, 0, expTime, "FarmXP"], allocatedServer?.name);
+        let success = loopRunning ? true : await arbitraryExecution(ns, expTool, threads,
+            [server.name, scheduleTime, 0, expTime, "FarmXP"].concat(getFlagsArgs(expTool.shortName, server.name, allowLoop)), allocatedServer?.name);
 
         if (advancedMode) { // Need to keep server money above zero, and security at minimum to farm xp from hack(); 
             const scheduleGrow = scheduleTime + cycleTime * 2 / 15 - scheduleDelay; // Time this to resolve at 1/3 * cycleTime after each hack fires
             const scheduleWeak = scheduleTime + cycleTime * 2 / 3 - scheduleDelay; //  Time this to resolve at 2/3 * cycleTime after each hack fires
-            success &&= await arbitraryExecution(ns, getTool("grow"), growThreadsNeeded, [server.name, scheduleGrow, 0, server.timeToGrow(), "growForXp"],
+            // TODO: We can set these up in looping mode as well as long as we keep track and spawn no more than 4 running instances.
+            success &&= await arbitraryExecution(ns, getTool("grow"), growThreadsNeeded,
+                [server.name, scheduleGrow, 0, server.timeToGrow(), "growForXp"].concat(getFlagsArgs("grow", server.name, false)), // Note: looping disabled for now
                 singleServer ? allocatedServer?.name : null, !singleServer);
-            success &&= await arbitraryExecution(ns, getTool("weak"), weakenThreadsNeeded, [server.name, scheduleWeak, 0, server.timeToWeaken(), "weakenForXp"],
+            success &&= await arbitraryExecution(ns, getTool("weak"), weakenThreadsNeeded,
+                [server.name, scheduleWeak, 0, server.timeToWeaken(), "weakenForXp"].concat(getFlagsArgs("weak", server.name, false)),
                 singleServer ? allocatedServer?.name : null, !singleServer);
             //log(`XP Farm ${server.name} money available is ${formatMoney(server.getMoney())} and security is ` +
             //    `${server.getSecurity().toPrecision(3)} of ${server.getMinSecurity().toPrecision(3)}`);
