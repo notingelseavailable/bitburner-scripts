@@ -31,7 +31,7 @@ export async function main(ns) {
             return;
         }
         // Print a status update (current charge level of all fragments)
-        let statusUpdate = `Preparing to charge each of your ${fragments.length} fragments. Curent charges:\n`;
+        let statusUpdate = `Preparing to charge ${fragments.length} fragments to ${maxCharges}. Curent charges:\n`;
         let minCharges = Number.MAX_SAFE_INTEGER;
         for (const fragment of fragments) {
             statusUpdate += `Fragment ${String(fragment.id).padStart(2)} at [${fragment.x},${fragment.y}] ` +
@@ -41,17 +41,17 @@ export async function main(ns) {
         log(ns, statusUpdate);
         if (minCharges >= maxCharges) break;
         // Charge each fragment one at a time
-        for (const fragment of fragments) {
+        for (const fragment of fragments.filter(f => f.numCharge < maxCharges)) {
             let availableRam = ns.getServerMaxRam('home') - ns.getServerUsedRam('home');
             let reservedRam = (idealReservedRam / availableRam < 0.05) ? options['reserved-ram-ideal'] : options['reserved-ram'];
             const threads = Math.floor((availableRam - reservedRam) / 2.0);
             // Only charge if we will not be bringing down the average
-            if (threads < fragment.avgCharge * 0.99 || fragment.numCharge > maxCharges) {
+            if (threads < fragment.avgCharge * 0.99) {
                 log(ns, `WARNING: The current average charge of fragment ${fragment.id} is ${formatNumberShort(fragment.avgCharge)}, ` +
                     `indicating that it has been charged while there was ${formatRam(2 * fragment.avgCharge)} or more free RAM on home, ` +
                     `but currently there is only ${formatRam(availableRam)} available, which would reduce the average charge and lower your stats. ` +
                     `This update will be skipped, and you should free up RAM on home to resume charging.`, false, 'warning');
-                ns.sleep(1000);
+                await ns.sleep(1000);
                 continue;
             }
             const pid = ns.run(getFilePath('/stanek.js.charge.js'), threads, fragment.x, fragment.y);
