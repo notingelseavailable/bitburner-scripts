@@ -250,7 +250,7 @@ export async function main(ns) {
     // These scripts are spawned periodically (at some interval) to do their checks, with an optional condition that limits when they should be spawned
     let shouldUpgradeHacknet = () => !shouldReserveMoney() && (whichServerIsRunning(ns, "hacknet-upgrade-manager.js", false) === null);
     // In BN8 (stocks-only bn) and others with hack income disabled, don't waste money on improving hacking infrastructure unless we have plenty of money to spare
-    let shouldImproveHacking = () => bitnodeMults.ScriptHackMoneyGain != 0 || playerStats.bitNodeN != 8 || ns.getServerMoneyAvailable("home") > 1e12;
+    let shouldImproveHacking = () => bitnodeMults.ScriptHackMoneyGain != 0 && playerStats.bitNodeN != 8 || ns.getServerMoneyAvailable("home") > 1e12;
     // Note: Periodic script are generally run every 30 seconds, but intervals are spaced out to ensure they aren't all bursting into temporary RAM at the same time.
     periodicScripts = [
         // Buy tor as soon as we can if we haven't already, and all the port crackers
@@ -477,14 +477,17 @@ async function doTargetingLoop(ns) {
                 // Pull additional data about servers that infrequently changes
                 await refreshDynamicServerData(ns, addedServerNames);
                 // Occassionally print our current targetting order (todo, make this controllable with a flag or custom UI?)
-                if (verbose && loops % 600 == 0)
-                    log('Targetting Order:\n  ' + serverListByTargetOrder.filter(s => s.shouldHack()).map(s =>
+                if (verbose && loops % 600 == 0) {
+                    const targetsLog = 'Targetting Order:\n  ' + serverListByTargetOrder.filter(s => s.shouldHack()).map(s =>
                         `${s.isPrepped() ? '*' : ' '} ${s.canHack() ? '✓' : 'X'} Money: ${formatMoney(s.getMoney(), 4)} of ${formatMoney(s.getMaxMoney(), 4)} ` +
                         `(${formatMoney(s.getMoneyPerRamSecond(), 4)}/ram.sec), Sec: ${formatNumber(s.getSecurity(), 3)} of ${formatNumber(s.getMinSecurity(), 3)}, ` +
                         `TTW: ${formatDuration(s.timeToWeaken())}, Hack: ${s.requiredHackLevel} - ${s.name}` +
                         (!stockMode || !serverStockSymbols[s.name] ? '' : ` Sym: ${serverStockSymbols[s.name]} Owned: ${serversWithOwnedStock.includes(s.name)} ` +
                             `Manip: ${shouldManipulateGrow[s.name] ? "grow" : shouldManipulateHack[s.name] ? "hack" : '(disabled)'}`))
-                        .join('\n  '));
+                        .join('\n  ');
+                    log(targetsLog);
+                    await ns.write("/Temp/targets.txt", targetsLog, "w");
+                }
             }
             var prepping = [];
             var preppedButNotTargeting = [];
