@@ -5,12 +5,12 @@ const fUnsolvedContracts = '/Temp/unsolved-contracts.txt'; // A global, persiste
 
 // This contract solver has the bare-minimum footprint of 1.6 GB (base) + 10 GB (ns.codingcontract.attempt)
 // It does this by requiring all contract information being gathered in advance and passed in as a JSON blob argument.
-// TODO: Pull solvers directly from https://raw.githubusercontent.com/danielyxie/bitburner/master/src/data/codingcontracttypes.ts
+// Solvers are mostly taken from source code at https://raw.githubusercontent.com/danielyxie/bitburner/master/src/data/codingcontracttypes.ts
 /** @param {NS} ns **/
 export async function main(ns) {
     if (ns.args.length < 1)
         ns.tprint('Contractor solver was incorrectly invoked without arguments.')
-    var contractsDb = JSON.parse(ns.args[0]);
+    let contractsDb = JSON.parse(ns.args[0]);
     const fContents = ns.read(fUnsolvedContracts);
     const notified = fContents ? JSON.parse(fContents) : [];
     for (const contractInfo of contractsDb) {
@@ -19,8 +19,9 @@ export async function main(ns) {
         if (answer != null) {
             const solvingResult = ns.codingcontract.attempt(answer, contractInfo.contract, contractInfo.hostname, { returnReward: true })
             if (solvingResult) {
-                ns.toast(`Solved ${contractInfo.contract} on ${contractInfo.hostname}`, 'success');
-                ns.tprint(`Solved ${contractInfo.contract} on ${contractInfo.hostname}. Reward: ${solvingResult}`)
+                const message = `Solved ${contractInfo.contract} on ${contractInfo.hostname} (${contractInfo.type}). Reward: ${solvingResult}`;
+                ns.toast(message, 'success');
+                ns.tprint(message);
             } else {
                 notice = `ERROR: Wrong answer for ${contractInfo.contract} on ${contractInfo.hostname}: ${JSON.stringify(answer)}`;
             }
@@ -48,9 +49,9 @@ function findAnswer(contract) {
 }
 
 function convert2DArrayToString(arr) {
-    var components = []
+    const components = []
     arr.forEach(function (e) {
-        var s = e.toString()
+        let s = e.toString()
         s = ['[', s, ']'].join('')
         components.push(s)
     })
@@ -61,8 +62,8 @@ function convert2DArrayToString(arr) {
 const codingContractTypesMetadata = [{
     name: 'Find Largest Prime Factor',
     solver: function (data) {
-        var fac = 2
-        var n = data
+        let fac = 2
+        let n = data
         while (n > (fac - 1) * (fac - 1)) {
             while (n % fac === 0) {
                 n = Math.round(n / fac)
@@ -75,8 +76,8 @@ const codingContractTypesMetadata = [{
 {
     name: 'Subarray with Maximum Sum',
     solver: function (data) {
-        var nums = data.slice()
-        for (var i = 1; i < nums.length; i++) {
+        const nums = data.slice()
+        for (let i = 1; i < nums.length; i++) {
             nums[i] = Math.max(nums[i], nums[i] + nums[i - 1])
         }
         return Math.max.apply(Math, nums)
@@ -85,11 +86,11 @@ const codingContractTypesMetadata = [{
 {
     name: 'Total Ways to Sum',
     solver: function (data) {
-        var ways = [1]
+        const ways = [1]
         ways.length = data + 1
         ways.fill(0, 1)
-        for (var i = 1; i < data; ++i) {
-            for (var j = i; j <= data; ++j) {
+        for (let i = 1; i < data; ++i) {
+            for (let j = i; j <= data; ++j) {
                 ways[j] += ways[j - i]
             }
         }
@@ -97,19 +98,35 @@ const codingContractTypesMetadata = [{
     },
 },
 {
+    name: 'Total Ways to Sum II',
+    solver: function (data) {
+        const n = data[0];
+        const s = data[1];
+        const ways = [1];
+        ways.length = n + 1;
+        ways.fill(0, 1);
+        for (let i = 0; i < s.length; i++) {
+            for (let j = s[i]; j <= n; j++) {
+                ways[j] += ways[j - s[i]];
+            }
+        }
+        return ways[n];
+    },
+},
+{
     name: 'Spiralize Matrix',
-    solver: function (data, ans) {
-        var spiral = []
-        var m = data.length
-        var n = data[0].length
-        var u = 0
-        var d = m - 1
-        var l = 0
-        var r = n - 1
-        var k = 0
+    solver: function (data) {
+        const spiral = []
+        const m = data.length
+        const n = data[0].length
+        let u = 0
+        let d = m - 1
+        let l = 0
+        let r = n - 1
+        let k = 0
         while (true) {
             // Up
-            for (var col = l; col <= r; col++) {
+            for (let col = l; col <= r; col++) {
                 spiral[k] = data[u][col]
                 ++k
             }
@@ -117,7 +134,7 @@ const codingContractTypesMetadata = [{
                 break
             }
             // Right
-            for (var row = u; row <= d; row++) {
+            for (let row = u; row <= d; row++) {
                 spiral[k] = data[row][r]
                 ++k
             }
@@ -125,7 +142,7 @@ const codingContractTypesMetadata = [{
                 break
             }
             // Down
-            for (var col = r; col >= l; col--) {
+            for (let col = r; col >= l; col--) {
                 spiral[k] = data[d][col]
                 ++k
             }
@@ -133,7 +150,7 @@ const codingContractTypesMetadata = [{
                 break
             }
             // Left
-            for (var row = d; row >= u; row--) {
+            for (let row = d; row >= u; row--) {
                 spiral[k] = data[row][l]
                 ++k
             }
@@ -148,27 +165,51 @@ const codingContractTypesMetadata = [{
 {
     name: 'Array Jumping Game',
     solver: function (data) {
-        var n = data.length
-        var i = 0
-        for (var reach = 0; i < n && i <= reach; ++i) {
+        const n = data.length
+        let i = 0
+        for (let reach = 0; i < n && i <= reach; ++i) {
             reach = Math.max(i + data[i], reach)
         }
-        var solution = i === n
+        const solution = i === n
         return solution ? 1 : 0
+    },
+},
+{
+    name: 'Array Jumping Game II',
+    solver: function (data) {
+        const n = data.length;
+        let reach = 0;
+        let jumps = 0;
+        let lastJump = -1;
+        while (reach < n - 1) {
+            let jumpedFrom = -1;
+            for (let i = reach; i > lastJump; i--) {
+                if (i + data[i] > reach) {
+                    reach = i + data[i];
+                    jumpedFrom = i;
+                }
+            }
+            if (jumpedFrom === -1) {
+                jumps = 0;
+                break;
+            }
+            lastJump = jumpedFrom;
+            jumps++;
+        }
+        return jumps;
     },
 },
 {
     name: 'Merge Overlapping Intervals',
     solver: function (data) {
-        var intervals = data.slice()
+        const intervals = data.slice()
         intervals.sort(function (a, b) {
             return a[0] - b[0]
         })
-        var result = []
-        var start = intervals[0][0]
-        var end = intervals[0][1]
-        for (var _i = 0, intervals_1 = intervals; _i < intervals_1.length; _i++) {
-            var interval = intervals_1[_i]
+        const result = []
+        let  start = intervals[0][0]
+        let  end = intervals[0][1]
+        for (const interval of intervals) {
             if (interval[0] <= end) {
                 end = Math.max(end, interval[1])
             } else {
@@ -178,25 +219,25 @@ const codingContractTypesMetadata = [{
             }
         }
         result.push([start, end])
-        var sanitizedResult = convert2DArrayToString(result)
+        const sanitizedResult = convert2DArrayToString(result)
         return sanitizedResult
     },
 },
 {
     name: 'Generate IP Addresses',
-    solver: function (data, ans) {
-        var ret = []
-        for (var a = 1; a <= 3; ++a) {
-            for (var b = 1; b <= 3; ++b) {
-                for (var c = 1; c <= 3; ++c) {
-                    for (var d = 1; d <= 3; ++d) {
+    solver: function (data) {
+        const  ret = []
+        for (let a = 1; a <= 3; ++a) {
+            for (let b = 1; b <= 3; ++b) {
+                for (let c = 1; c <= 3; ++c) {
+                    for (let d = 1; d <= 3; ++d) {
                         if (a + b + c + d === data.length) {
-                            var A = parseInt(data.substring(0, a), 10)
-                            var B = parseInt(data.substring(a, a + b), 10)
-                            var C = parseInt(data.substring(a + b, a + b + c), 10)
-                            var D = parseInt(data.substring(a + b + c, a + b + c + d), 10)
+                            const A = parseInt(data.substring(0, a), 10)
+                            const B = parseInt(data.substring(a, a + b), 10)
+                            const C = parseInt(data.substring(a + b, a + b + c), 10)
+                            const D = parseInt(data.substring(a + b + c, a + b + c + d), 10)
                             if (A <= 255 && B <= 255 && C <= 255 && D <= 255) {
-                                var ip = [A.toString(), '.', B.toString(), '.', C.toString(), '.', D.toString()].join('')
+                                const ip = [A.toString(), '.', B.toString(), '.', C.toString(), '.', D.toString()].join('')
                                 if (ip.length === data.length + 3) {
                                     ret.push(ip)
                                 }
@@ -212,9 +253,9 @@ const codingContractTypesMetadata = [{
 {
     name: 'Algorithmic Stock Trader I',
     solver: function (data) {
-        var maxCur = 0
-        var maxSoFar = 0
-        for (var i = 1; i < data.length; ++i) {
+        let maxCur = 0
+        let maxSoFar = 0
+        for (let i = 1; i < data.length; ++i) {
             maxCur = Math.max(0, (maxCur += data[i] - data[i - 1]))
             maxSoFar = Math.max(maxCur, maxSoFar)
         }
@@ -224,8 +265,8 @@ const codingContractTypesMetadata = [{
 {
     name: 'Algorithmic Stock Trader II',
     solver: function (data) {
-        var profit = 0
-        for (var p = 1; p < data.length; ++p) {
+        let profit = 0
+        for (let p = 1; p < data.length; ++p) {
             profit += Math.max(data[p] - data[p - 1], 0)
         }
         return profit.toString()
@@ -234,12 +275,11 @@ const codingContractTypesMetadata = [{
 {
     name: 'Algorithmic Stock Trader III',
     solver: function (data) {
-        var hold1 = Number.MIN_SAFE_INTEGER
-        var hold2 = Number.MIN_SAFE_INTEGER
-        var release1 = 0
-        var release2 = 0
-        for (var _i = 0, data_1 = data; _i < data_1.length; _i++) {
-            var price = data_1[_i]
+        let hold1 = Number.MIN_SAFE_INTEGER
+        let hold2 = Number.MIN_SAFE_INTEGER
+        let release1 = 0
+        let release2 = 0
+        for (const price of data) {
             release2 = Math.max(release2, hold2 + price)
             hold2 = Math.max(hold2, release1 - price)
             release1 = Math.max(release1, hold1 + price)
@@ -251,31 +291,31 @@ const codingContractTypesMetadata = [{
 {
     name: 'Algorithmic Stock Trader IV',
     solver: function (data) {
-        var k = data[0]
-        var prices = data[1]
-        var len = prices.length
+        const  k = data[0]
+        const  prices = data[1]
+        const  len = prices.length
         if (len < 2) {
             return 0
         }
         if (k > len / 2) {
-            var res = 0
-            for (var i = 1; i < len; ++i) {
+            let  res = 0
+            for (let  i = 1; i < len; ++i) {
                 res += Math.max(prices[i] - prices[i - 1], 0)
             }
             return res
         }
-        var hold = []
-        var rele = []
+        const hold = []
+        const rele = []
         hold.length = k + 1
         rele.length = k + 1
-        for (var i = 0; i <= k; ++i) {
+        for (let i = 0; i <= k; ++i) {
             hold[i] = Number.MIN_SAFE_INTEGER
             rele[i] = 0
         }
-        var cur
-        for (var i = 0; i < len; ++i) {
+        let cur
+        for (let i = 0; i < len; ++i) {
             cur = prices[i]
-            for (var j = k; j > 0; --j) {
+            for (let j = k; j > 0; --j) {
                 rele[j] = Math.max(rele[j], hold[j] + cur)
                 hold[j] = Math.max(hold[j], rele[j - 1] - cur)
             }
@@ -286,10 +326,10 @@ const codingContractTypesMetadata = [{
 {
     name: 'Minimum Path Sum in a Triangle',
     solver: function (data) {
-        var n = data.length
-        var dp = data[n - 1].slice()
-        for (var i = n - 2; i > -1; --i) {
-            for (var j = 0; j < data[i].length; ++j) {
+        const n = data.length
+        const dp = data[n - 1].slice()
+        for (let i = n - 2; i > -1; --i) {
+            for (let j = 0; j < data[i].length; ++j) {
                 dp[j] = Math.min(dp[j], dp[j + 1]) + data[i][j]
             }
         }
@@ -299,15 +339,15 @@ const codingContractTypesMetadata = [{
 {
     name: 'Unique Paths in a Grid I',
     solver: function (data) {
-        var n = data[0] // Number of rows
-        var m = data[1] // Number of columns
-        var currentRow = []
+        const n = data[0] // Number of rows
+        const m = data[1] // Number of columns
+        const currentRow = []
         currentRow.length = n
-        for (var i = 0; i < n; i++) {
+        for (let i = 0; i < n; i++) {
             currentRow[i] = 1
         }
-        for (var row = 1; row < m; row++) {
-            for (var i = 1; i < n; i++) {
+        for (let row = 1; row < m; row++) {
+            for (let i = 1; i < n; i++) {
                 currentRow[i] += currentRow[i - 1]
             }
         }
@@ -317,13 +357,13 @@ const codingContractTypesMetadata = [{
 {
     name: 'Unique Paths in a Grid II',
     solver: function (data) {
-        var obstacleGrid = []
+        const obstacleGrid = []
         obstacleGrid.length = data.length
-        for (var i = 0; i < obstacleGrid.length; ++i) {
+        for (let i = 0; i < obstacleGrid.length; ++i) {
             obstacleGrid[i] = data[i].slice()
         }
-        for (var i = 0; i < obstacleGrid.length; i++) {
-            for (var j = 0; j < obstacleGrid[0].length; j++) {
+        for (let i = 0; i < obstacleGrid.length; i++) {
+            for (let j = 0; j < obstacleGrid[0].length; j++) {
                 if (obstacleGrid[i][j] == 1) {
                     obstacleGrid[i][j] = 0
                 } else if (i == 0 && j == 0) {
@@ -337,12 +377,99 @@ const codingContractTypesMetadata = [{
     },
 },
 {
+    name: 'Shortest Path in a Grid',
+    solver: function (data) {
+        //slightly adapted and simplified to get rid of MinHeap usage, and construct a valid path from poential candidates   
+        //MinHeap replaced by simple array acting as queue (breadth first search)  
+        const width = data[0].length;
+        const height = data.length;
+        const dstY = height - 1;
+        const dstX = width - 1;
+  
+        const distance = new Array(height);
+        //const prev: [[number, number] | undefined][] = new Array(height);
+        const queue = [];
+  
+        for (let y = 0; y < height; y++) {
+            distance[y] = new Array(width).fill(Infinity);
+            //prev[y] = new Array(width).fill(undefined) as [undefined];
+        }
+  
+        function validPosition(y, x) {
+            return y >= 0 && y < height && x >= 0 && x < width && data[y][x] == 0;
+        }
+  
+        // List in-bounds and passable neighbors
+        function* neighbors(y, x) {
+            if (validPosition(y - 1, x)) yield [y - 1, x]; // Up
+            if (validPosition(y + 1, x)) yield [y + 1, x]; // Down
+            if (validPosition(y, x - 1)) yield [y, x - 1]; // Left
+            if (validPosition(y, x + 1)) yield [y, x + 1]; // Right
+        }
+  
+        // Prepare starting point
+        distance[0][0] = 0;
+
+        //## Original version
+        // queue.push([0, 0], 0);
+        // // Take next-nearest position and expand potential paths from there
+        // while (queue.size > 0) {
+        //   const [y, x] = queue.pop() as [number, number];
+        //   for (const [yN, xN] of neighbors(y, x)) {
+        //     const d = distance[y][x] + 1;
+        //     if (d < distance[yN][xN]) {
+        //       if (distance[yN][xN] == Infinity)
+        //         // Not reached previously
+        //         queue.push([yN, xN], d);
+        //       // Found a shorter path
+        //       else queue.changeWeight(([yQ, xQ]) => yQ == yN && xQ == xN, d);
+        //       //prev[yN][xN] = [y, x];
+        //       distance[yN][xN] = d;
+        //     }
+        //   }
+        // }
+
+        //Simplified version. d < distance[yN][xN] should never happen for BFS if d != infinity, so we skip changeweight and simplify implementation
+        //algo always expands shortest path, distance != infinity means a <= lenght path reaches it, only remaining case to solve is infinity    
+        queue.push([0, 0]);
+        while (queue.length > 0) {
+            const [y, x] = queue.shift()
+            for (const [yN, xN] of neighbors(y, x)) {
+                const d = distance[y][x] + 1
+                if (distance[yN][xN] == Infinity){
+                    queue.push([yN, xN]);
+                    distance[yN][xN] = d;
+                }
+            }
+        }
+
+        // No path at all?
+        if (distance[dstY][dstX] == Infinity) return "";
+
+        //trace path back to start
+        let path = ""
+        let [yC, xC] = [dstY, dstX]
+        while (xC != 0 || yC != 0){
+            const dist = distance[yC][xC];
+            for (const [yF, xF] of neighbors(yC, xC)) {
+                if (distance[yF][xF] == dist - 1){
+                    path = ( xC == xF  ? (yC == yF + 1 ? "D" : "U") : (xC == xF + 1 ? "R" : "L") ) + path;                    
+                    [yC, xC] = [yF, xF]
+                    break
+                }
+            }            
+        }
+        
+        return path;
+    }
+},
+{
     name: 'Sanitize Parentheses in Expression',
     solver: function (data) {
-        var left = 0
-        var right = 0
-        var res = []
-        for (var i = 0; i < data.length; ++i) {
+        let  left = 0
+        let  right = 0
+        const res = []
+        for (let  i = 0; i < data.length; ++i) {
             if (data[i] === '(') {
                 ++left
             } else if (data[i] === ')') {
@@ -353,7 +480,7 @@ const codingContractTypesMetadata = [{
         function dfs(pair, index, left, right, s, solution, res) {
             if (s.length === index) {
                 if (left === 0 && right === 0 && pair === 0) {
-                    for (var i = 0; i < res.length; i++) {
+                    for (let i = 0; i < res.length; i++) {
                         if (res[i] === solution) {
                             return
                         }
@@ -382,8 +509,8 @@ const codingContractTypesMetadata = [{
 {
     name: 'Find All Valid Math Expressions',
     solver: function (data) {
-        var num = data[0]
-        var target = data[1]
+        const num = data[0]
+        const target = data[1]
 
         function helper(res, path, num, target, pos, evaluated, multed) {
             if (pos === num.length) {
@@ -392,11 +519,11 @@ const codingContractTypesMetadata = [{
                 }
                 return
             }
-            for (var i = pos; i < num.length; ++i) {
+            for (let i = pos; i < num.length; ++i) {
                 if (i != pos && num[pos] == '0') {
                     break
                 }
-                var cur = parseInt(num.substring(pos, i + 1))
+                const cur = parseInt(num.substring(pos, i + 1))
                 if (pos === 0) {
                     helper(res, path + cur, num, target, i + 1, cur, cur)
                 } else {
@@ -410,9 +537,91 @@ const codingContractTypesMetadata = [{
         if (num == null || num.length === 0) {
             return []
         }
-        var result = []
+        const result = []
         helper(result, '', num, target, 0, 0, 0)
         return result
+    },
+},
+{
+    //Taken from https://github.com/danielyxie/bitburner/blob/dev/src/utils/HammingCodeTools.ts and converted to js by Discord: H3draut3r#6722
+    name: 'HammingCodes: Integer to encoded Binary',
+    solver: function (value) {
+        // Calculates the needed amount of parityBits 'without' the "overall"-Parity
+        const HammingSumOfParity = lengthOfDBits => lengthOfDBits == 0 ? 0 : lengthOfDBits < 3 ? lengthOfDBits + 1 :
+            Math.ceil(Math.log2(lengthOfDBits * 2)) <= Math.ceil(Math.log2(1 + lengthOfDBits + Math.ceil(Math.log2(lengthOfDBits)))) ?
+                Math.ceil(Math.log2(lengthOfDBits) + 1) : Math.ceil(Math.log2(lengthOfDBits));
+        const data = value.toString(2).split(""); // first, change into binary string, then create array with 1 bit per index
+        const sumParity = HammingSumOfParity(data.length); // get the sum of needed parity bits (for later use in encoding)
+        const count = (arr, val) => arr.reduce((a, v) => (v === val ? a + 1 : a), 0);
+        // function count for specific entries in the array, for later use
+        const build = ["x", "x", ...data.splice(0, 1)]; // init the "pre-build"
+        for (let i = 2; i < sumParity; i++)
+            build.push("x", ...data.splice(0, Math.pow(2, i) - 1)); // add new paritybits and the corresponding data bits (pre-building array)
+        // Get the index numbers where the parity bits "x" are placed
+        const parityBits = build.map((e, i) => [e, i]).filter(([e, _]) => e == "x").map(([_, i]) => i);
+        for (const index of parityBits) {
+            const tempcount = index + 1; // set the "stepsize" for the parityBit
+            const temparray = []; // temporary array to store the extracted bits
+            const tempdata = [...build]; // only work with a copy of the build
+            while (tempdata[index] !== undefined) {
+                // as long as there are bits on the starting index, do "cut"
+                const temp = tempdata.splice(index, tempcount * 2); // cut stepsize*2 bits, then...
+                temparray.push(...temp.splice(0, tempcount)); // ... cut the result again and keep the first half
+            }
+            temparray.splice(0, 1); // remove first bit, which is the parity one
+            build[index] = (count(temparray, "1") % 2).toString(); // count with remainder of 2 and"toString" to store the parityBit
+        } // parity done, now the "overall"-parity is set
+        build.unshift((count(build, "1") % 2).toString()); // has to be done as last element
+        return build.join(""); // return the build as string
+    },
+},
+{
+    name: 'HammingCodes: Encoded Binary to Integer',
+    solver: function (data) {
+        //check for altered bit and decode
+        const build = data.split(""); // ye, an array for working, again
+        const testArray = []; //for the "truthtable". if any is false, the data has an altered bit, will check for and fix it
+        const sumParity = Math.ceil(Math.log2(data.length)); // sum of parity for later use
+        const count = (arr, val) => arr.reduce((a, v) => (v === val ? a + 1 : a), 0);
+        // the count.... again ;)
+        let overallParity = build.splice(0, 1).join(""); // store first index, for checking in next step and fix the build properly later on
+        testArray.push(overallParity == (count(build, "1") % 2).toString() ? true : false); // first check with the overall parity bit
+        for (let i = 0; i < sumParity; i++) {
+            // for the rest of the remaining parity bits we also "check"
+            const tempIndex = Math.pow(2, i) - 1; // get the parityBits Index
+            const tempStep = tempIndex + 1; // set the stepsize
+            const tempData = [...build]; // get a "copy" of the build-data for working
+            const tempArray = []; // init empty array for "testing"
+            while (tempData[tempIndex] != undefined) {
+                // extract from the copied data until the "starting" index is undefined
+                const temp = [...tempData.splice(tempIndex, tempStep * 2)]; // extract 2*stepsize
+                tempArray.push(...temp.splice(0, tempStep)); // and cut again for keeping first half
+            }
+            const tempParity = tempArray.shift(); // and again save the first index separated for checking with the rest of the data
+            testArray.push(tempParity == (count(tempArray, "1") % 2).toString() ? true : false);
+            // is the tempParity the calculated data? push answer into the 'truthtable'
+        }
+        let fixIndex = 0; // init the "fixing" index and start with 0
+        for (let i = 1; i < sumParity + 1; i++) {
+            // simple binary adding for every boolean in the testArray, starting from 2nd index of it
+            fixIndex += testArray[i] ? 0 : Math.pow(2, i) / 2;
+        }
+        build.unshift(overallParity); // now we need the "overall" parity back in it's place
+        // try fix the actual encoded binary string if there is an error
+        if (fixIndex > 0 && testArray[0] == false) { // if the overall is false and the sum of calculated values is greater equal 0, fix the corresponding hamming-bit           
+            build[fixIndex] = build[fixIndex] == "0" ? "1" : "0";
+        } else if (testArray[0] == false) { // otherwise, if the the overallparity is the only wrong, fix that one           
+            overallParity = overallParity == "0" ? "1" : "0";
+        } else if (testArray[0] == true && testArray.some((truth) => truth == false)) {
+            return 0; // ERROR: There's some strange going on... 2 bits are altered? How? This should not happen
+        }
+        // oof.. halfway through... we fixed an possible altered bit, now "extract" the parity-bits from the build
+        for (let i = sumParity; i >= 0; i--) {
+            // start from the last parity down the 2nd index one
+            build.splice(Math.pow(2, i), 1);
+        }
+        build.splice(0, 1); // remove the overall parity bit and we have our binary value
+        return parseInt(build.join(""), 2); // parse the integer with redux 2 and we're done!
     },
 },
 ]
