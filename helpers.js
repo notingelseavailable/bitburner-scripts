@@ -167,13 +167,18 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, fnIsAlive, command,
     if (verbose) ns.print(`Process ${pid} is done. Reading the contents of ${fName}...`);
     // Read the file, with auto-retries if it fails
     let lastRead;
-    const fileData = await autoRetry(ns, () => ns.read(fName), f => (lastRead = f) !== undefined && f !== "" && f !== "STALE",
-        () => `ns.read('${fName}') returned no result ("${lastRead}") (command likely failed to run).` +
-            `\n  Command: ${command}\n  Script: ${fNameCommand}` +
-            `\nEnsure you have sufficient free RAM to run this temporary script.`,
-        maxRetries, retryDelayMs, undefined, verbose);
-    if (verbose) ns.print(`Read the following data for command ${command}:\n${fileData}`);
-    return JSON.parse(fileData); // Deserialize it back into an object/array and return
+    try {
+        const fileData = await autoRetry(ns, () => ns.read(fName), f => (lastRead = f) !== undefined && f !== "" && f !== "STALE",
+            () => `ns.read('${fName}') returned no result ("${lastRead}") (command likely failed to run).` +
+                `\n  Command: ${command}\n  Script: ${fNameCommand}` +
+                `\nEnsure you have sufficient free RAM to run this temporary script.`,
+            maxRetries, retryDelayMs, undefined, verbose);
+        if (verbose) ns.print(`Read the following data for command ${command}:\n${fileData}`);
+        return JSON.parse(fileData); // Deserialize it back into an object/array and return
+    } finally {
+        // If we failed to run the command, clear the "stale" contents we created earlier. Ideally, we would remove the file entirely, but this is not free.
+        if (lastRead == "STALE") await ns.write(fName, "", 'w');
+    }
 }
 
 /** Evaluate an arbitrary ns command by writing it to a new script and then running or executing it.
@@ -242,9 +247,10 @@ export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbos
     checkNsInstance(ns, '"waitForProcessToComplete_Custom"');
     if (!verbose) disableLogs(ns, ['asleep']);
     // Wait for the PID to stop running (cheaper than e.g. deleting (rm) a possibly pre-existing file and waiting for it to be recreated)
+    let start = Date.now();
     for (var retries = 0; retries < 1000; retries++) {
         if (!fnIsAlive(pid)) break; // Script is done running
-        if (verbose && retries % 100 === 0) ns.print(`Waiting for pid ${pid} to complete... (${retries})`);
+        if (verbose && retries % 100 === 0) ns.print(`Waiting for pid ${pid} to complete... (${formatDuration(Date.now() - start)})`);
         await ns.asleep(10);
     }
     // Make sure that the process has shut down and we haven't just stopped retrying
@@ -283,8 +289,12 @@ export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, e
 export function log(ns, message = "", alsoPrintToTerminal = false, toastStyle = "", maxToastLength = Number.MAX_SAFE_INTEGER) {
     checkNsInstance(ns, '"log"');
     ns.print(message);
-    if (alsoPrintToTerminal) ns.tprint(message);
     if (toastStyle) ns.toast(message.length <= maxToastLength ? message : message.substring(0, maxToastLength - 3) + "...", toastStyle);
+    if (alsoPrintToTerminal) {
+        ns.tprint(message);
+        // TODO: Find a way write things logged to the terminal to a "permanent" terminal log file, preferably without this becoming an async function.
+        //ns.write("log.terminal.txt", message + '\n', 'a'); // Note: we should get away with not awaiting this promise since it's not a script file
+    }
     return message;
 }
 
@@ -306,7 +316,7 @@ export function scanAllServers(ns) {
 }
 
 /** @param {NS} ns 
- * Get a dictionary of active source files, taking into account the current active bitnode as well. **/
+ * Get a dictionary of active source files, taking into account the current active bitnode as well (optionally disabled). **/
 export async function getActiveSourceFiles(ns, includeLevelsFromCurrentBitnode = true) {
     return await getActiveSourceFiles_Custom(ns, getNsDataThroughFile, includeLevelsFromCurrentBitnode);
 }
@@ -315,18 +325,17 @@ export async function getActiveSourceFiles(ns, includeLevelsFromCurrentBitnode =
  * getActiveSourceFiles Helper that allows the user to pass in their chosen implementation of getNsDataThroughFile to minimize RAM usage **/
 export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile, includeLevelsFromCurrentBitnode = true) {
     checkNsInstance(ns, '"getActiveSourceFiles"');
-    let tempFile = '/Temp/owned-source-files.txt';
     // Find out what source files the user has unlocked
     let dictSourceFiles;
-    try { await fnGetNsDataThroughFile(ns, `Object.fromEntries(ns.getOwnedSourceFiles().map(sf => [sf.n, sf.lvl]))`, tempFile); } catch { }
-    if (!dictSourceFiles) { // Bit of a hack, but if RAM is so low that this fails, we can fallback to using an older version of this file, and even assuming we have no source files.
-        dictSourceFiles = ns.read(tempFile)
-        dictSourceFiles = dictSourceFiles ? JSON.parse(dictSourceFiles) : {};
-    }
+    try {
+        dictSourceFiles = await fnGetNsDataThroughFile(ns, `Object.fromEntries(ns.getOwnedSourceFiles().map(sf => [sf.n, sf.lvl]))`, '/Temp/owned-source-files.txt');
+    } catch { dictSourceFiles = {}; } // If this fails (e.g. low RAM), return an empty dictionary
     // If the user is currently in a given bitnode, they will have its features unlocked
     if (includeLevelsFromCurrentBitnode) {
-        const bitNodeN = (await fnGetNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')).bitNodeN;
-        dictSourceFiles[bitNodeN] = Math.max(3, dictSourceFiles[bitNodeN] || 0);
+        try {
+            const bitNodeN = (await fnGetNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')).bitNodeN;
+            dictSourceFiles[bitNodeN] = Math.max(3, dictSourceFiles[bitNodeN] || 0);
+        } catch { /* We are expected to be fault-tolerant in low-ram conditions */ }
     }
     return dictSourceFiles;
 }
@@ -363,6 +372,31 @@ export async function instanceCount(ns, onHost = "home", warn = true, tailOtherI
             others.slice(0, others.length - 1).forEach(pid => ns.tail(pid));
     }
     return others.length;
+}
+
+let cachedStockSymbols; // Cache of stock symbols since these never change
+
+/** Helper function to get the total value of stocks using as little RAM as possible.
+ * @param {NS} ns
+ * @param {Player} player - If you have previously retrieve player info, you can provide that here to save some time.
+ * @param {string[]} stockSymbols - If you have previously retrieved a list of all stock symbols, you can provide that here to save some time. */
+export async function getStocksValue(ns, player = null, stockSymbols = null) {
+    if (!(player || await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/getPlayer.txt')).hasTixApiAccess) return 0;
+    if (!stockSymbols || stockSymbols.length == 0) {
+        if (!cachedStockSymbols)
+            cachedStockSymbols = await getNsDataThroughFile(ns, `ns.stock.getSymbols()`, '/Temp/stock-symbols.txt');
+        stockSymbols = cachedStockSymbols;
+    }
+    const helper = async (fn) => await getNsDataThroughFile(ns,
+        `Object.fromEntries(ns.args.map(sym => [sym, ns.stock.${fn}(sym)]))`, `/Temp/stock-${fn}.txt`, stockSymbols);
+    const askPrices = await helper('getAskPrice');
+    const bidPrices = await helper('getBidPrice');
+    const positions = await helper('getPosition');
+    return stockSymbols.map(sym => ({ sym, pos: positions[sym], ask: askPrices[sym], bid: bidPrices[sym] }))
+        .reduce((total, stk) => total + (stk.pos[0] * stk.bid) /* Long Value */ + stk.pos[2] * (stk.pos[3] * 2 - stk.ask) /* Short Value */
+            // Subtract commission only if we have one or more shares (this is money we won't get when we sell our position)
+            // If for some crazy reason we have shares both in the short and long position, we'll have to pay the commission twice (two separate sales)
+            - 100000 * (Math.sign(stk.pos[0]) + Math.sign(stk.pos[2])), 0);
 }
 
 /** @param {NS} ns 

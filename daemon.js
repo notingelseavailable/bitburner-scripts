@@ -154,10 +154,15 @@ const argsSchema = [
     ['no-tail-windows', false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
     ['initial-study-time', 10], // Seconds. Set to 0 to not do any studying at startup. By default, if early in an augmentation, will start with a little study to boost hack XP
     ['initial-hack-xp-time', 10], // Seconds. Set to 0 to not do any hack-xp grinding at startup. By default, if early in an augmentation, will start with a little study to boost hack XP
+    ['disable-script', []], // The names of scripts that you do not want run by our scheduler
+    ['run-script', []], // The names of additional scripts that you want daemon to run on home
 ];
 
 export function autocomplete(data, args) {
     data.flags(argsSchema);
+    const lastFlag = args.length > 1 ? args[args.length - 2] : null;
+    if (lastFlag == "--disable-script" || lastFlag == "--run-script")
+        return data.scripts;
     return [];
 }
 
@@ -232,7 +237,7 @@ export async function main(ns) {
     const openTailWindows = !options['no-tail-windows'];
     asynchronousHelpers = [
         { name: "stats.js", shouldRun: () => ns.getServerMaxRam("home") >= 64 /* Don't waste precious RAM */ }, // Adds stats not usually in the HUD
-        { name: "stockmaster.js", args: openTailWindows ? ["--show-market-summary"] : [], tail: openTailWindows, shouldRun: () => playerStats.hasTixApiAccess }, // Start our stockmaster if we have the required stockmarket access
+        { name: "stockmaster.js", args: openTailWindows ? ["--show-market-summary"] : [], tail: openTailWindows }, // Start our stockmaster
         { name: "hacknet-upgrade-manager.js", args: ["-c", "--max-payoff-time", "1h"] }, // Kickstart hash income by buying everything with up to 1h payoff time immediately
         { name: "spend-hacknet-hashes.js", args: [], shouldRun: () => 9 in dictSourceFiles }, // Always have this running to make sure hashes aren't wasted
         { name: "sleeve.js", tail: openTailWindows, shouldRun: () => 10 in dictSourceFiles }, // Script to create manage our sleeves for us
@@ -244,6 +249,8 @@ export async function main(ns) {
         { name: "bladeburner.js", tail: openTailWindows, shouldRun: () => 7 in dictSourceFiles && playerStats.bitNodeN != 8 }, // Script to create manage bladeburner for us
     ];
     asynchronousHelpers.forEach(helper => helper.name = getFilePath(helper.name));
+    // Add any additional scripts to be run provided by --run-script arguments
+    options['run-script'].forEach(s => asynchronousHelpers.push({ name: s }));
     asynchronousHelpers.forEach(helper => helper.isLaunched = false);
     asynchronousHelpers.forEach(helper => helper.requiredServer = "home"); // All helpers should be launched at home since they use tempory scripts, and we only reserve ram on home
     // These scripts are spawned periodically (at some interval) to do their checks, with an optional condition that limits when they should be spawned
@@ -262,11 +269,11 @@ export async function main(ns) {
         // Buy upgrades regardless of payoff if they cost less than 0.1% of our money
         { interval: 29000, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "1E100h", "--max-spend", ns.getServerMoneyAvailable("home") * 0.001] },
         {
-            interval: 30000, name: "/Tasks/ram-manager.js", args: () => ['--budget', '0.5', '--reserve', reservedMoney(ns)], // Spend about 50% of un-reserved cash on home RAM upgrades (permanent) when they become available
+            interval: 30000, name: "/Tasks/ram-manager.js", args: () => ['--budget', 0.5, '--reserve', reservedMoney(ns)], // Spend about 50% of un-reserved cash on home RAM upgrades (permanent) when they become available
             shouldRun: () => 4 in dictSourceFiles && shouldImproveHacking() // Only trigger if hack income is important
         },
-        {   // Periodically check for new faction invites and join if deemed useful to be in that faction
-            interval: 31000, name: "faction-manager.js", requiredServer: "home", args: ['--join-only'],
+        {   // Periodically check for new faction invites and join if deemed useful to be in that faction. Also determines how many augs we could afford if we installed right now
+            interval: 31000, name: "faction-manager.js", requiredServer: "home", args: ['--verbose', 'false'],
             // Don't start auto-joining factions until we're holding 1 billion (so coding contracts returning money is probably less critical) or we've joined one already
             shouldRun: () => 4 in dictSourceFiles && (playerStats.factions.length > 0 || ns.getServerMoneyAvailable("home") > 1e9) &&
                 (ns.getServerMaxRam("home") >= 128 / (2 ** dictSourceFiles[4])) // Uses singularity functions, and higher SF4 levels result in lower RAM requirements
@@ -417,6 +424,10 @@ const funcResultOrValue = fnOrVal => (fnOrVal instanceof Function ? fnOrVal() : 
 // Returns true if the tool is running (including if it was already running), false if it could not be run.
 /** @param {NS} ns **/
 async function tryRunTool(ns, tool) {
+    if (options['disable-script'].includes(tool.name)) {
+        if (verbose) log(ns, `Tool ${tool.name} was not launched as it was specified with --disable-script`);
+        return false;
+    }
     if (!doesFileExist(tool.name)) {
         log(ns, `ERROR: Tool ${tool.name} was not found on ${daemonHost}`, true, 'error');
         return false;
@@ -721,7 +732,7 @@ async function doTargetingLoop(ns) {
             const expectedDeletedHostPhrase = "Invalid hostname: ";
             let expectedErrorPhraseIndex = errorMessage.indexOf(expectedDeletedHostPhrase);
             if (expectedErrorPhraseIndex == -1) {
-                log(ns, `WARNING: Caught an error in the targeting loop: ${errorMessage}`, true, 'warning');
+                log(ns, `WARNING: daemon.js Caught an error in the targeting loop: ${errorMessage}`, true, 'warning');
                 continue;
             }
             let start = expectedErrorPhraseIndex + expectedDeletedHostPhrase.length;
@@ -739,7 +750,7 @@ async function doTargetingLoop(ns) {
 let actualWeakenPotency = () => bitnodeMults.ServerWeakenRate * weakenThreadPotency * (1 - weakenThreadPadding);
 
 // Dictionaries of static server information
-let serversDictCommand = (servers, command) => `Object.fromEntries(${JSON.stringify(servers)}.map(server => [server, ${command}]))`;
+let serversDictCommand = command => `Object.fromEntries(ns.args.map(server => [server, ${command}]))`;
 let dictServerRequiredHackinglevels;
 let dictServerNumPortsRequired;
 let dictServerMinSecurityLevels;
@@ -748,15 +759,15 @@ let dictServerProfitInfo;
 
 // Gathers up arrays of server data via external request to have the data written to disk.
 async function getStaticServerData(ns, serverNames) {
-    dictServerRequiredHackinglevels = await getNsDataThroughFile(ns, serversDictCommand(serverNames, 'ns.getServerRequiredHackingLevel(server)'), '/Temp/servers-hack-req.txt');
-    dictServerNumPortsRequired = await getNsDataThroughFile(ns, serversDictCommand(serverNames, 'ns.getServerNumPortsRequired(server)'), '/Temp/servers-num-ports.txt');
+    dictServerRequiredHackinglevels = await getNsDataThroughFile(ns, serversDictCommand('ns.getServerRequiredHackingLevel(server)'), '/Temp/servers-hack-req.txt', serverNames);
+    dictServerNumPortsRequired = await getNsDataThroughFile(ns, serversDictCommand('ns.getServerNumPortsRequired(server)'), '/Temp/servers-num-ports.txt', serverNames);
     await refreshDynamicServerData(ns, serverNames);
 }
 
 /** @param {NS} ns **/
 async function refreshDynamicServerData(ns, serverNames) {
-    dictServerMinSecurityLevels = await getNsDataThroughFile(ns, serversDictCommand(serverNames, 'ns.getServerMinSecurityLevel(server)'), '/Temp/servers-security.txt');
-    dictServerMaxMoney = await getNsDataThroughFile(ns, serversDictCommand(serverNames, 'ns.getServerMaxMoney(server)'), '/Temp/servers-max-money.txt');
+    dictServerMinSecurityLevels = await getNsDataThroughFile(ns, serversDictCommand('ns.getServerMinSecurityLevel(server)'), '/Temp/servers-security.txt', serverNames);
+    dictServerMaxMoney = await getNsDataThroughFile(ns, serversDictCommand('ns.getServerMaxMoney(server)'), '/Temp/servers-max-money.txt', serverNames);
     // Get the information about the relative profitability of each server
     const pid = await exec(ns, getFilePath('analyze-hack.js'), 'home', 1, '--all', '--silent');
     await waitForProcessToComplete_Custom(ns, getFnIsAliveViaNsPs(ns), pid);
@@ -1592,9 +1603,11 @@ async function updateStockPositions(ns) {
 async function terminateScriptsManipulatingStock(ns, servers, toolName) {
     const problematicProcesses = addedServerNames.flatMap(hostname => ps(ns, hostname)
         .filter(process => servers.includes(process.args[0]) && (loopingMode || toolName == process.filename && process.args.length > 5 && process.args[5]))
-        .map(process => ({ pid: process.pid, hostname })));
-    if (problematicProcesses.length > 0)
-        await runCommand(ns, JSON.stringify(problematicProcesses) + '.forEach(p => ns.kill(p.pid, p.hostname))', '/Temp/kill-remote-stock-manipulation.js');
+        .map(process => process.pid));
+    if (problematicProcesses.length > 0) {
+        log(ns, `INFO: Killing ${problematicProcesses.length} pids running ${toolName} with stock manipulation in the wrong direction.`);
+        await runCommand(ns, 'ns.args.forEach(p => ns.kill(p))', '/Temp/kill-all-pids.js', problematicProcesses);
+    }
 }
 
 function addServer(server, verbose) {
