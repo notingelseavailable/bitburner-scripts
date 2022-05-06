@@ -92,6 +92,7 @@ let highUtilizationIterations = 0;
 let lastShareTime = 0; // Tracks when share was last invoked so we can respect the configured share-cooldown
 let allTargetsPrepped = false;
 
+/** @returns {Player} */
 async function updatePlayerStats() { return playerStats = await getNsDataThroughFile(_ns, `ns.getPlayer()`, '/Temp/player-info.txt'); }
 
 function playerHackSkill() { return playerStats.hacking; }
@@ -177,9 +178,9 @@ export async function main(ns) {
     const scriptName = ns.getScriptName();
     const competingDaemons = ns.ps("home").filter(s => s.filename == scriptName && JSON.stringify(s.args) != JSON.stringify(ns.args));
     if (competingDaemons.length > 0) {
-        const strDaemonPids = JSON.stringify(competingDaemons.map(p => p.pid));
-        log(ns, `WARN: Detected ${competingDaemons.length} other '${scriptName}' instance is running at home (pids: ${strDaemonPids}) - shutting it down...`, true, 'warning')
-        const killPid = await runCommand(ns, `${strDaemonPids}.forEach(ns.kill)`, '/Temp/kill-daemons.js');
+        const daemonPids = competingDaemons.map(p => p.pid);
+        log(ns, `WARN: Detected ${competingDaemons.length} other '${scriptName}' instance is running at home (pids: ${daemonPids}) - shutting it down...`, true, 'warning')
+        const killPid = await killProcessIds(ns, daemonPids);
         await waitForProcessToComplete_Custom(ns, getFnIsAliveViaNsPs(ns), killPid);
     }
 
@@ -1317,7 +1318,8 @@ export async function arbitraryExecution(ns, tool, threads, args, preferredServe
                 missing_scripts.push(getFilePath('helpers.js')); // Some tools require helpers.js. Best to copy it around.
             if (verbose)
                 log(ns, `Copying ${tool.name} from ${daemonHost} to ${targetServer.name} so that it can be executed remotely.`);
-            await getNsDataThroughFile(ns, `await ns.scp(${JSON.stringify(missing_scripts)}, '${daemonHost}', '${targetServer.name}')`, '/Temp/copy-scripts.txt')
+            await getNsDataThroughFile(ns, `await ns.scp(ns.args.slice(2), ns.args[0], ns.args[1])`,
+                '/Temp/copy-scripts.txt', [daemonHost, targetServer.name, ...missing_scripts])
             await ns.asleep(5); // Workaround for Bitburner bug https://github.com/danielyxie/bitburner/issues/1714 - newly created/copied files sometimes need a bit more time, even if awaited
             just_copied = true;
         }
@@ -1601,6 +1603,7 @@ async function updateStockPositions(ns) {
     shouldManipulateHack = newShouldManipulateHack;
     serversWithOwnedStock = newServersWithOwnedStock;
 }
+
 // Kills all scripts running the specified tool and targeting one of the specified servers if stock market manipulation is enabled
 async function terminateScriptsManipulatingStock(ns, servers, toolName) {
     const problematicProcesses = addedServerNames.flatMap(hostname => ps(ns, hostname)
@@ -1608,8 +1611,14 @@ async function terminateScriptsManipulatingStock(ns, servers, toolName) {
         .map(process => process.pid));
     if (problematicProcesses.length > 0) {
         log(ns, `INFO: Killing ${problematicProcesses.length} pids running ${toolName} with stock manipulation in the wrong direction.`);
-        await runCommand(ns, 'ns.args.forEach(p => ns.kill(p))', '/Temp/kill-all-pids.js', problematicProcesses);
+        await killProcessIds(ns, problematicProcesses);
     }
+}
+
+/** Helper to kill a list of process ids
+ * @param {NS} ns **/
+async function killProcessIds(ns, processIds) {
+    return await runCommand(ns, `ns.args.forEach(ns.kill)`, '/Temp/kill-pids.js', processIds);
 }
 
 function addServer(server, verbose) {
