@@ -8,7 +8,6 @@ const persistentLog = "log.autopilot.txt";
 const factionManagerOutputFile = "/Temp/affordable-augs.txt"; // Temp file produced by faction manager with status information
 
 let options = null; // The options used at construction time
-// TODO: Currently these may as well be hard-coded, args are lost when various other scripts kill and restart us.
 const argsSchema = [ // The set of all command line arguments
 	['next-bn', 12], // If we destroy the current BN, the next BN to start
 	['disable-auto-destroy-bn', false], // Set to true if you do not want to auto destroy this BN when done
@@ -24,6 +23,7 @@ const argsSchema = [ // The set of all command line arguments
 	['enable-bladeburner', false], // Set to true to allow bladeburner progression (probably slows down BN completion)
 	['wait-for-4s-threshold', 0.5], // Set to 0 to not reset until we have 4S. If money is above this ratio of the 4S Tix API cost, don't reset until we buy it.
 	['disable-wait-for-4s', false], // If true, will doesn't wait for the 4S Tix API to be acquired under any circumstantes
+	['disable-rush-gangs', false], // Set to true to disable focusing work-for-faction on Karma until gangs are unlocked
 	['on-completion-script', null], // Spawn this script when we defeat the bitnode
 	['on-completion-script-args', []], // Optional args to pass to the script when we defeat the bitnode
 ];
@@ -52,47 +52,68 @@ export async function main(ns) {
 	const runOptions = getConfiguration(ns, argsSchema);
 	if (!runOptions || await instanceCount(ns) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
 	options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
+
 	log(ns, "INFO: Auto-pilot engaged...", true, 'info');
-
-	// Because we cannot pass args to "install" and "destroy" functions, we write them to disk to override defaults
-	const changedArgs = JSON.stringify(argsSchema
-		.filter(a => JSON.stringify(runOptions[a[0]]) != JSON.stringify(a[1]))
-		.map(a => [a[0], runOptions[a[0]]]));
-	// Only update the config file if it doesn't match the most resent set of run args
-	const configPath = `${ns.getScriptName()}.config.txt`
-	const currentConfig = ns.read(configPath);
-	if ((changedArgs.length > 2 || currentConfig) && changedArgs != currentConfig) {
-		await ns.write(configPath, changedArgs, "w");
-		log(ns, `INFO: Updated "${configPath}" to persist the most recent run args through resets: ${changedArgs}`, true, 'info');
+	let startUpRan = false;
+	while (true) {
+		try {
+			// Start-up actions, wrapped in error handling in case of temporary failures
+			if (!startUpRan) startUpRan = await startUp(ns);
+			// Main loop: Monitor progress in the current BN and automatically reset when we can afford TRP, or N augs.
+			await mainLoop(ns);
+		}
+		catch (err) {
+			log(ns, `WARNING: autopilot.js Caught (and suppressed) an unexpected error:\n` +
+				(typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
+		}
+		await ns.asleep(options['interval']);
 	}
+}
 
-	// Clear reset global state
-	playerInGang = rushGang = ranCasino = reserveForDaedalus = daedalusUnavailable = false;
+/** @param {NS} ns **/
+async function startUp(ns) {
+	await persistConfigChanges(ns);
+
+	// Reset global state
+	playerInGang = rushGang = ranCasino = reserveForDaedalus = daedalusUnavailable = stanekLaunched = false;
 	playerInstalledAugCount = wdAvailable = null;
 	installCountdown = daemonStartTime = lastScriptsCheck = reservedPurchase = 0;
-	killScripts = [];
+	installedAugmentations = killScripts = [];
 
 	// Collect and cache some one-time data
 	const player = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/getPlayer.txt');
 	bitnodeMults = await tryGetBitNodeMultipliers(ns);
 	dictOwnedSourceFiles = await getActiveSourceFiles(ns, false);
 	unlockedSFs = await getActiveSourceFiles(ns, true);
-	installedAugmentations = !(4 in unlockedSFs) ? [] :
-		await getNsDataThroughFile(ns, 'ns.getOwnedAugmentations()', '/Temp/player-augs-installed.txt');
-	if (!(4 in unlockedSFs))
-		log(ns, `WARNING: This script requires SF4 (singularity) functions to assess purchasable augmentations ascend automatically. ` +
-			`Some functionality will be diabled and you'll have to manage working for factions, purchasing, and installing augmentations yourself.`, true);
+	try {
+		installedAugmentations = !(4 in unlockedSFs) ? [] :
+			await getNsDataThroughFile(ns, 'ns.getOwnedAugmentations()', '/Temp/player-augs-installed.txt');
+		if (!(4 in unlockedSFs))
+			log(ns, `WARNING: This script requires SF4 (singularity) functions to assess purchasable augmentations ascend automatically. ` +
+				`Some functionality will be diabled and you'll have to manage working for factions, purchasing, and installing augmentations yourself.`, true);
+	} catch (err) {
+		if (unlockedSFs[4] || 0 == 3) throw err; // No idea why this failed, treat as temporary and allow auto-retry.		
+		log(ns, `WARNING: You only have SF4 level ${unlockedSFs[4]}. Without level 3, some singularity functions will be ` +
+			`too expensive to run until you have bought a lot of home RAM.`, true);
+	}
 	if (player.playtimeSinceLastBitnode < 60 * 1000) // Skip initialization if we've been in the bitnode for more than 1 minute
 		await initializeNewBitnode(ns);
+	return true;
+}
 
-	// Main loop: Monitor progress in the current BN and automatically reset when we can afford TRP, or N augs.
-	while (true) {
-		try { await mainLoop(ns); }
-		catch (err) {
-			log(ns, `WARNING: autopilot.js Caught (and suppressed) an unexpected error in the main loop:\n` +
-				(typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
-		}
-		await ns.asleep(options['interval']);
+/** Write any configuration changes to disk so that they will survive resets and new bitnodes
+ * @param {NS} ns **/
+async function persistConfigChanges(ns) {
+	// Because we cannot pass args to "install" and "destroy" functions, we write them to disk to override defaults
+	const changedArgs = JSON.stringify(argsSchema
+		.filter(a => JSON.stringify(options[a[0]]) != JSON.stringify(a[1]))
+		.map(a => [a[0], options[a[0]]]));
+	// Only update the config file if it doesn't match the most resent set of run args
+	const configPath = `${ns.getScriptName()}.config.txt`
+	const currentConfig = ns.read(configPath);
+	if ((changedArgs.length > 2 || currentConfig) && changedArgs != currentConfig) {
+		await ns.write(configPath, changedArgs, "w");
+		log(ns, `INFO: Updated "${configPath}" to persist the most recent run args through resets: ${changedArgs}`, true, 'info');
 	}
 }
 
@@ -263,11 +284,11 @@ async function checkOnRunningScripts(ns, player) {
 
 	// TODO: Take charge to stanek.acceptGift and place fragments before installing augs and ascending for the first time
 	// Once stanek's gift is accepted and not charged, launch it first
-	if ((13 in unlockedSFs) && installedAugmentations.includes(`Stanek's Gift - Genesis`) && !stanekLaunched) {
-		stanekLaunched = true;
-		if (!findScript('stanek.js'))
-			launchScriptHelper(ns, 'stanek.js');
-		await ns.asleep(2000); // Stanek will launch a version of daemon that works with charging. Give it time so we detect it as started below.
+	let stanekRunning = (13 in unlockedSFs) && findScript('stanek.js') !== undefined;
+	if ((13 in unlockedSFs) && installedAugmentations.includes(`Stanek's Gift - Genesis`) && !stanekLaunched && !stanekRunning) {
+		stanekLaunched = true; // Once we've know we've launched stanek once, we never have to again this reset.
+		launchScriptHelper(ns, 'stanek.js');
+		stanekRunning = true;
 	}
 
 	// Ensure daemon.js is running in some form
@@ -281,8 +302,11 @@ async function checkOnRunningScripts(ns, player) {
 	daemonArgs.push('--disable-script', getFilePath('work-for-factions.js')); // We will run this ourselves with args of our choosing
 	// By default, don't join bladeburner, since it slows BN12 progression by requiring combat augs not used elsewhere
 	if (options['enable-bladeburner']) daemonArgs.push('--run-script', getFilePath('bladeburner.js'));
-	// Launch or re-launch daemon with the desired arguments
-	if (!daemon || player.hacking >= hackThreshold && !daemon.args.includes("--looping-mode")) {
+	// If we have SF4, but not level 3, instruct daemon.js to reserve additional home RAM
+	if ((4 in unlockedSFs) && unlockedSFs[4] < 3)
+		daemonArgs.push('--reserved-ram', 32 * (unlockedSFs[4] == 2 ? 4 : 16));
+	// Launch or re-launch daemon with the desired arguments (only if it wouldn't get in the way of stanek charging)
+	if ((!daemon || player.hacking >= hackThreshold && !daemon.args.includes("--looping-mode")) && !stanekRunning) {
 		if (player.hacking >= hackThreshold)
 			log(ns, `INFO: Hack level (${player.hacking}) is >= ${hackThreshold} (--high-hack-threshold): Starting daemon.js in high-performance hacking mode.`);
 		launchScriptHelper(ns, 'daemon.js', daemonArgs);
@@ -304,7 +328,7 @@ async function checkOnRunningScripts(ns, player) {
 	if (2 in unlockedSFs) {
 		// Check if we've joined a gang yet. (Never have to check again once we know we're in one)
 		if (!playerInGang) playerInGang = await getNsDataThroughFile(ns, 'ns.gang.inGang()', '/Temp/gang-inGang.txt');
-		rushGang = !playerInGang;
+		rushGang = !options['disable-rush-gangs'] && !playerInGang;
 		// Detect if a 'work-for-factions.js' instance is running with args that don't match our goal. We aren't too picky,
 		// (so the player can run with custom args), but should have --crime-focus if (and only if) we're still working towards a gang.
 		const wrongWork = findScript('work-for-factions.js', !rushGang ? s => s.args.includes("--crime-focus") :
@@ -347,7 +371,6 @@ async function maybeDoCasino(ns, player) {
 	// Make sure "work-for-factions.js" is dead first, lest it steal focus and break the casino script before it has a chance to kill all scripts.
 	await killScript(ns, 'work-for-factions.js');
 
-	// TODO: Preserve the current script's state / args through the reset
 	const pid = launchScriptHelper(ns, 'casino.js', ['--kill-all-scripts', true, '--on-completion-script', ns.getScriptName()]);
 	if (pid) {
 		await waitForProcessToComplete(ns, pid);
@@ -382,6 +405,8 @@ async function maybeInstallAugmentations(ns, player) {
 		return reservedPurchase = 0;
 	}
 	const facman = JSON.parse(facmanOutput); // { affordable_nf_count: int, affordable_augs: [string], owned_count: int, unowned_count: int, total_rep_cost: number, total_aug_cost: number }
+	// TODO: Temporary Hack, don't count `Stanek's Gift - Genesis` in the list of affordable_augs if it's there, we will be skipping it for now
+	facman.affordable_augs = facman.affordable_augs.filter(a => a != `Stanek's Gift - Genesis`);
 	const affordableAugCount = facman.affordable_augs.length;
 	playerInstalledAugCount = facman.owned_count;
 
@@ -466,8 +491,8 @@ async function shouldDelayInstall(ns, player) {
 			(player.has4SData ? 0 : 1E9 * (bitnodeMults?.FourSigmaMarketDataCost || 1));
 		// If we're 50% of the way there, hold off, regardless of the '--wait-for-4s' setting
 		if (totalWorth / totalCost >= options['wait-for-4s-threshold']) {
-			setStatus(ns, `Not installing until scripts purchase the 4SDataTixApi because we have 
-				${(100 * totalWorth / totalCost).toFixed(0)}% of the cost (controlled by --wait-for-4s-threshold)`);
+			setStatus(ns, `Not installing until scripts purchase the 4SDataTixApi because we have ` +
+				`${(100 * totalWorth / totalCost).toFixed(0)}% of the cost (controlled by --wait-for-4s-threshold)`);
 			return true;
 		}
 	}
