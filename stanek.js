@@ -1,4 +1,7 @@
-import { log, disableLogs, getFilePath, getConfiguration, instanceCount, getNsDataThroughFile, waitForProcessToComplete, getActiveSourceFiles, formatNumberShort } from './helpers.js'
+import {
+    log, disableLogs, getFilePath, getConfiguration, formatNumberShort, formatRam,
+    getNsDataThroughFile, waitForProcessToComplete, getActiveSourceFiles, instanceCount
+} from './helpers.js'
 
 // Default sripts called at startup and shutdown of stanek
 const defaultStartupScript = getFilePath('daemon.js');
@@ -43,8 +46,15 @@ export async function main(ns) {
     disableLogs(ns, ['sleep', 'run', 'getServerMaxRam', 'getServerUsedRam'])
 
     // Validate whether we can run
-    if ((await getActiveFragments(ns)).length == 0)
-        return log(ns, "ERROR: You must manually populate your stanek grid with your desired fragments before you run this script to charge them.", true, 'error');
+    if ((await getActiveFragments(ns)).length == 0) {
+        // Try to run our helper script to set up the grid
+        const pid = ns.run(getFilePath('stanek.js.create.js'));
+        if (pid) await waitForProcessToComplete(ns, pid);
+        else log(ns, "ERROR while attempting to run stanek.js.create.js (pid was 0)");
+        // Verify that this worked.
+        if ((await getActiveFragments(ns)).length == 0)
+            return log(ns, "ERROR: You must manually populate your stanek grid with your desired fragments before you run this script to charge them.", true, 'error');
+    }
 
     currentServer = await getNsDataThroughFile(ns, `ns.getHostname()`, '/Temp/getHostname.txt');
     maxCharges = options['max-charges']; // Don't bother adding charges beyond this amount
@@ -167,12 +177,12 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
         const threads = Math.floor((availableRam - reservedRam) / 2.0);
         if (threads <= 0) {
             log(ns, `WARNING: Insufficient free RAM on ${currentServer} to charge Stanek ` +
-                `(${formatRAM(availableRam)} free - ${formatRAM(reservedRam)} reserved). Will try again later...`);
+                `(${formatRam(availableRam)} free - ${formatRAM(reservedRam)} reserved). Will try again later...`);
             continue;
         }
         const pid = ns.run(chargeScript, threads, fragment.x, fragment.y);
         if (!pid) {
-            log(ns, `WARNING: Failed to charge Stanek with ${threads} threads thinking there was ${formatRAM(availableRam)} free on ${currentServer}. ` +
+            log(ns, `WARNING: Failed to charge Stanek with ${threads} threads thinking there was ${formatRam(availableRam)} free on ${currentServer}. ` +
                 `Check if another script is fighting stanek.js for RAM. Will try again later...`);
             continue;
         }
