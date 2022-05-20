@@ -55,6 +55,12 @@ export async function main(ns) {
 	options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
 
 	log(ns, "INFO: Auto-pilot engaged...", true, 'info');
+	// The game does not allow boolean flags to be turned "off" via command line, only on. Since this gets saved, notify the user about how they can turn it off.
+	const flagsSet = ['disable-auto-destroy-bn', 'enable-bladeburner', 'disable-wait-for-4s', 'disable-rush-gangs'].filter(f => options[f]);
+	for (const flag of flagsSet)
+		log(ns, `WARNING: You have previously enabled the flag "--${flag}". Because of the way this script saves its run settings, the ` +
+			`only way to now turn this back off will be to manually edit or delete the file ${getFilePath(ns.getScriptName())}.config.txt`, true);
+
 	let startUpRan = false;
 	while (true) {
 		try {
@@ -197,10 +203,22 @@ async function checkIfBnIsComplete(ns, player) {
 		if (pid) await waitForProcessToComplete(ns, pid);
 	}
 
+	// Check if there is some reason not to automatically destroy this BN
+	if (player.bitNodeN == 10) { // Suggest the user doesn't reset until they buy all sleeves and max memory
+		const shouldHaveSleeveCount = Math.max(8, 6 + dictOwnedSourceFiles[10]);
+		const numSleeves = await getNsDataThroughFile(ns, `ns.sleeve.getNumSleeves()`, '/Temp/sleeve-count.txt');
+		if (numSleeves < shouldHaveSleeveCount) {
+			log(ns, `WARNING: Detected that you only have ${numSleeves} sleeves, but you could have ${shouldHaveSleeveCount}.` +
+				`\nTry not to leave BN10 before buying all you can from the faction "The Covenant", especially sleeve memory!` +
+				`\nNOTE: You can ONLY buy sleeves/memory from The Covenant in BN10, which is why it's important to do this before you leave.`);
+			return wdAvailable = false;
+		}
+	}
 	if (options['disable-auto-destroy-bn']) {
 		log(ns, `--disable-auto-destroy-bn is set, you can manually exit the bitnode when ready.`, true);
 		return wdAvailable = false;
 	}
+
 	// Use the new special singularity function to automate entering a new BN
 	pid = await runCommand(ns, `ns.singularity.destroyW0r1dD43m0n(ns.args[0], ns.args[1])`,
 		'/Temp/singularity-destroyW0r1dD43m0n.js', [options['next-bn'], ns.getScriptName()]);
@@ -208,7 +226,7 @@ async function checkIfBnIsComplete(ns, player) {
 		await waitForProcessToComplete(ns, pid);
 		await ns.sleep(10000);
 	}
-	log(ns, `ERROR: Tried destroy the bitnode, but we're still here...`, true, 'ERROR')
+	log(ns, `ERROR: Tried destroy the bitnode, but we're still here...`, true, 'error')
 	return true;
 }
 
@@ -298,7 +316,7 @@ async function checkOnRunningScripts(ns, player) {
 		// Launch daemon in "looping" mode if we have sufficient hack level
 		["--looping-mode", "--cycle-timing-delay", 2000, "--queue-delay", "10", "--initial-max-targets", "63",
 			"--stock-manipulation-focus", "--silent-misfires", "--no-share",
-			// User recovery thread padding sparingly until our hack level is significantly higher
+			// Use recovery thread padding sparingly until our hack level is significantly higher
 			"--recovery-thread-padding", 1.0 + (player.hacking - hackThreshold) / 1000.0];
 	daemonArgs.push('--disable-script', getFilePath('work-for-factions.js')); // We will run this ourselves with args of our choosing
 	// By default, don't join bladeburner, since it slows BN12 progression by requiring combat augs not used elsewhere
