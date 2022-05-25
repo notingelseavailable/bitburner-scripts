@@ -7,10 +7,11 @@ import {
 const persistentLog = "log.autopilot.txt";
 const factionManagerOutputFile = "/Temp/affordable-augs.txt"; // Temp file produced by faction manager with status information
 const casinoFlagFile = "/Temp/ran-casino.txt";
+const defaultBnOrder = [4.3, 1.3, 5.1, 9.2, 10.1, 2.1, 8.2, 10.3, 9.3, 11.3, 13.3, 5.3, 7.1, 6.3, 7.3, 2.3, 8.3, 3.3, 12.999];
 
 let options = null; // The options used at construction time
 const argsSchema = [ // The set of all command line arguments
-	['next-bn', 12], // If we destroy the current BN, the next BN to start
+	['next-bn', 0], // If we destroy the current BN, the next BN to start
 	['disable-auto-destroy-bn', false], // Set to true if you do not want to auto destroy this BN when done
 	['install-at-aug-count', 11], // Automatically install when we can afford this many new augmentations (with NF only counting as 1)
 	['install-at-aug-plus-nf-count', 14], // or... automatically install when we can afford this many augmentations including additional levels of Neuroflux
@@ -43,7 +44,7 @@ let reservedPurchase; // Flag to indicate whether we've reservedPurchase money a
 let reserveForDaedalus, daedalusUnavailable; // Flags to indicate that we should be keeping 100b cash on hand to earn an invite to Daedalus
 let lastScriptsCheck; // Last time we got a listing of all running scripts
 let killScripts; // A list of scripts flagged to be restarted due to changes in priority
-let dictOwnedSourceFiles, unlockedSFs, bitnodeMults; // Info for the current bitnode
+let dictOwnedSourceFiles, unlockedSFs, bitnodeMults, nextBn; // Info for the current bitnode
 let installedAugmentations, playerInstalledAugCount, stanekLaunched; // Info for the current ascend
 let daemonStartTime; // The time we personally launched daemon.
 let installCountdown; // Start of a countdown before we install augmentations.
@@ -105,6 +106,19 @@ async function startUp(ns) {
 	}
 	if (player.playtimeSinceLastBitnode < 60 * 1000) // Skip initialization if we've been in the bitnode for more than 1 minute
 		await initializeNewBitnode(ns, player);
+
+	// Decide what the next-up bitnode should be
+	const getSFLevel = bn => Number(bn + "." + ((dictOwnedSourceFiles[bn] || 0) + (player.bitNodeN == bn ? 1 : 0)));
+	const nextSfEarned = getSFLevel(player.bitNodeN);
+	const nextRecommendedSf = defaultBnOrder.find(v => v - Math.floor(v) > getSFLevel(Math.floor(v)) - Math.floor(v));
+	const nextRecommendedBn = Math.floor(nextRecommendedSf);
+	nextBn = options['next-bn'] || nextRecommendedBn;
+	log(ns, `INFO: After the current BN (${nextSfEarned}), the next recommended BN is ${nextRecommendedBn} until you have SF ${nextRecommendedSf}.` +
+		`\nYou are currently earning SF${nextSfEarned}, and you already own the following source files: ` +
+		Object.keys(dictOwnedSourceFiles).map(bn => `${bn}.${dictOwnedSourceFiles[bn]}`).join(", "));
+	if (nextBn != nextRecommendedBn)
+		log(ns, `WARN: The next recommended BN is ${nextRecommendedBn}, but the --next-bn parameter is set to override this with ${nextBn}.`, true, 'warning');
+
 	return true;
 }
 
@@ -221,7 +235,7 @@ async function checkIfBnIsComplete(ns, player) {
 
 	// Use the new special singularity function to automate entering a new BN
 	pid = await runCommand(ns, `ns.singularity.destroyW0r1dD43m0n(ns.args[0], ns.args[1])`,
-		'/Temp/singularity-destroyW0r1dD43m0n.js', [options['next-bn'], ns.getScriptName()]);
+		'/Temp/singularity-destroyW0r1dD43m0n.js', [nextBn, ns.getScriptName()]);
 	if (pid) {
 		await waitForProcessToComplete(ns, pid);
 		await ns.sleep(10000);
@@ -312,21 +326,23 @@ async function checkOnRunningScripts(ns, player) {
 	const daemon = findScript('daemon.js');
 	// If player hacking level is about 8000, run in "start-tight" mode
 	const hackThreshold = options['high-hack-threshold'];
-	const daemonArgs = player.hacking < hackThreshold ? ["--stock-manipulation"] :
+	const daemonArgs = (player.hacking < hackThreshold || player.bitNodeN == 8) ? ["--stock-manipulation"] :
 		// Launch daemon in "looping" mode if we have sufficient hack level
 		["--looping-mode", "--cycle-timing-delay", 2000, "--queue-delay", "10", "--initial-max-targets", "63",
 			"--stock-manipulation-focus", "--silent-misfires", "--no-share",
 			// Use recovery thread padding sparingly until our hack level is significantly higher
 			"--recovery-thread-padding", 1.0 + (player.hacking - hackThreshold) / 1000.0];
 	daemonArgs.push('--disable-script', getFilePath('work-for-factions.js')); // We will run this ourselves with args of our choosing
+	// Hacking earns no money in BN8, so prioritize XP
+	if (player.bitNodeN == 8) daemonArgs.push("--xp-only");
 	// By default, don't join bladeburner, since it slows BN12 progression by requiring combat augs not used elsewhere
 	if (options['enable-bladeburner']) daemonArgs.push('--run-script', getFilePath('bladeburner.js'));
 	// If we have SF4, but not level 3, instruct daemon.js to reserve additional home RAM
 	if ((4 in unlockedSFs) && unlockedSFs[4] < 3)
 		daemonArgs.push('--reserved-ram', 32 * (unlockedSFs[4] == 2 ? 4 : 16));
 	// Launch or re-launch daemon with the desired arguments (only if it wouldn't get in the way of stanek charging)
-	if ((!daemon || player.hacking >= hackThreshold && !daemon.args.includes("--looping-mode")) && !stanekRunning) {
-		if (player.hacking >= hackThreshold)
+	if ((!daemon || player.hacking >= hackThreshold && !daemon.args.includes("--looping-mode") && !daemon.args.includes("--xp-only")) && !stanekRunning) {
+		if (player.hacking >= hackThreshold && !(player.bitNodeN == 8))
 			log(ns, `INFO: Hack level (${player.hacking}) is >= ${hackThreshold} (--high-hack-threshold): Starting daemon.js in high-performance hacking mode.`);
 		launchScriptHelper(ns, 'daemon.js', daemonArgs);
 		daemonStartTime = Date.now();
