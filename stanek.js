@@ -1,13 +1,13 @@
 import {
     log, disableLogs, getFilePath, getConfiguration, formatNumberShort, formatRam,
-    getNsDataThroughFile, waitForProcessToComplete, getActiveSourceFiles, instanceCount
+    getNsDataThroughFile, waitForProcessToComplete, getActiveSourceFiles, instanceCount, unEscapeArrayArgs
 } from './helpers.js'
 
 // Default sripts called at startup and shutdown of stanek
 const defaultStartupScript = getFilePath('daemon.js');
-const defaultStartupArgs = ['--reserved-ram', Number.MAX_SAFE_INTEGER];
+const defaultStartupArgs = ['--reserved-ram', 1E100];
 const defaultCompletionScript = getFilePath('daemon.js');
-const defaultCompletionArgs = ['-v', '--stock-manipulation'];
+const defaultCompletionArgs = [];
 // Name of the external script that will be created and called to generate charges
 const chargeScript = "/Temp/stanek.js.charge.js";
 const awakeningRep = 1E6;
@@ -60,7 +60,7 @@ export async function main(ns) {
     maxCharges = options['max-charges']; // Don't bother adding charges beyond this amount
     idealReservedRam = 32; // Reserve this much RAM, if it wouldnt make a big difference anyway. Leaves room for other temp-scripts to spawn.
     let startupScript = options['on-startup-script'];
-    let startupArgs = options['on-startup-script-args'];
+    let startupArgs = unEscapeArrayArgs(options['on-startup-script-args']);
     if (!startupScript) { // Apply defaults if not present.
         startupScript = defaultStartupScript;
         if (startupArgs.length == 0) startupArgs = defaultStartupArgs;
@@ -118,7 +118,7 @@ export async function main(ns) {
     log(ns, `SUCCESS: All stanek fragments at desired charge ${maxCharges}`, true, 'success');
     // Run the completion script before shutting down    
     let completionScript = options['on-completion-script'];
-    let completionArgs = options['on-completion-script-args'];
+    let completionArgs = unEscapeArrayArgs(options['on-completion-script-args']);
     if (!completionScript) { // Apply defaults if not present.
         completionScript = defaultCompletionScript;
         if (completionArgs.length == 0) completionArgs = defaultCompletionArgs;
