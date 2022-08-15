@@ -316,7 +316,7 @@ async function checkOnRunningScripts(ns, player) {
 
 	// Spend hacknet hashes on our boosting best hack-income server once established
 	const spendingHashesOnHacking = findScript('spend-hacknet-hashes.js', s => s.args.includes("--spend-on-server"))
-	if ((9 in unlockedSFs) && !spendingHashesOnHacking && player.playtimeSinceLastAug >= options['time-before-boosting-best-hack-server']) {
+	if ((9 in unlockedSFs) && !spendingHashesOnHacking && player.playtimeSinceLastAug >= options['time-before-boosting-best-hack-server'] && !(player.bitNodeN == 8)) {
 		const strServerIncomeInfo = ns.read('/Temp/analyze-hack.txt');	// HACK: Steal this file that Daemon also relies on
 		if (strServerIncomeInfo) {
 			const incomeByServer = JSON.parse(strServerIncomeInfo);
@@ -411,6 +411,7 @@ async function checkOnRunningScripts(ns, player) {
 async function maybeDoCasino(ns, player) {
 	if (ranCasino) return;
 	const casinoRanFileSet = ns.read(casinoFlagFile);
+	const cashRootBought = installedAugmentations.includes(`CashRoot Starter Kit`);
 	// If the casino flag file is already set in first 10 minutes of the reset, and we don't have anywhere near the 10B it should give,
 	// it's likely a sign that the flag is wrong and we should run cleanup and let casino get run again to be safe.
 	if (player.playtimeSinceLastAug < 10 * 60 * 1000 && casinoRanFileSet && player.money + (await getStocksValue(ns, player)) < 8E9) {
@@ -418,9 +419,15 @@ async function maybeDoCasino(ns, player) {
 		await ns.sleep(200); // Wait a short while for the dust to settle.
 	} else if (casinoRanFileSet)
 		return ranCasino = true;
-	if (player.playtimeSinceLastAug < 60000) // If it's been less than 1 minute, wait a while to establish income
+	//If it's been less than 1 minute, wait a while to establish income
+	//Unless we have CashRoot Starter Kit, at which point we should head straight to the casino
+	//Or if BN8, as that also gives us plenty of starter cash to casino immediately
+	if (player.playtimeSinceLastAug < 60000 && !cashRootBought && !player.bitNodeN == 8)
 		return;
-	if (player.money / player.playtimeSinceLastAug > 5e9 / 60000) // If we're making more than ~5b / minute, no need to run casino.
+	//If we're making more than ~5b / minute, no need to run casino.
+	//Unless BN8, if BN8 we always need casino cash bootstrap
+	//Since it's possible that the CashRoot Startker Kit could give a false income velocity, account for that.
+	if ((cashRootBought ? player.money-1e6 : player.money) / player.playtimeSinceLastAug > 5e9 / 60000 && !player.bitNodeN == 8) 
 		return ranCasino = true;
 	if (player.money > 10E9) // If we already have 10b, assume we ran and lost track, or just don't need the money
 		return ranCasino = true;
