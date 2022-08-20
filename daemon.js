@@ -150,9 +150,9 @@ async function getPlayerInfo(ns) {
     return _cachedPlayerInfo = await getNsDataThroughFile(ns, `ns.getPlayer()`, '/Temp/player-info.txt');
 }
 
-function playerHackSkill() { return _cachedPlayerInfo.hacking; }
+function playerHackSkill() { return _cachedPlayerInfo.skills.hacking; }
 
-function getPlayerHackingGrowMulti() { return _cachedPlayerInfo.hacking_grow_mult };
+function getPlayerHackingGrowMulti() { return _cachedPlayerInfo.mults.hacking_grow };
 
 /** Helper to check if a file exists.
  * A helper is used so that we have the option of exploring alternative implementations that cost less/no RAM.
@@ -174,7 +174,7 @@ function reservedMoney(ns) {
     if (!doesFileExist(ns, "SQLInject.exe", "home") && playerMoney > 200e6)
         shouldReserve += 250e6; // Start saving at 200m of the 250m required for SQLInject
     const fourSigmaCost = (bitnodeMults.FourSigmaMarketDataApiCost * 25000000000);
-    if (!_cachedPlayerInfo.has4SDataTixApi && playerMoney >= fourSigmaCost / 2)
+    if (!ns.stock.has4SDataTIXAPI() && playerMoney >= fourSigmaCost / 2)
         shouldReserve += fourSigmaCost; // Start saving if we're half-way to buying 4S market access
     return shouldReserve;
 }
@@ -1331,7 +1331,7 @@ export async function arbitraryExecution(ns, tool, threads, args, preferredServe
                 missing_scripts.push(getFilePath('helpers.js')); // Some tools require helpers.js. Best to copy it around.
             if (verbose)
                 log(ns, `Copying ${tool.name} from ${daemonHost} to ${targetServer.name} so that it can be executed remotely.`);
-            await getNsDataThroughFile(ns.scp(), `await ns.scp(ns.args.slice(2), ns.args[0], ns.args[1])`,
+            await getNsDataThroughFile(ns, `await ns.scp(ns.args.slice(2), ns.args[0], ns.args[1])`,
                 '/Temp/copy-scripts.txt', [targetServer.name, daemonHost, ...missing_scripts])
             //await ns.sleep(5); // Workaround for Bitburner bug https://github.com/danielyxie/bitburner/issues/1714 - newly created/copied files sometimes need a bit more time, even if awaited
         }
@@ -1601,7 +1601,7 @@ let shouldManipulateHack = []; // Dict of server names, with a value of "true" i
 let failedStockUpdates = 0;
 /** @param {NS} ns **/
 async function updateStockPositions(ns) {
-    if (!_cachedPlayerInfo.hasTixApiAccess) return; // No point in attempting anything here if the user doesn't have stock market access yet.
+    if (!ns.stock.hasTIXAPIAccess()) return; // No point in attempting anything here if the user doesn't have stock market access yet.
     let updatedPositions = ns.read(`/Temp/stock-probabilities.txt`); // Should be a dict of stock symbol -> prob left by the stockmaster.js script.
     if (!updatedPositions) {
         failedStockUpdates++;
