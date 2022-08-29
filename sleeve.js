@@ -20,7 +20,7 @@ const argsSchema = [
     ['buy-cooldown', 60 * 1000], // Must wait this may milliseconds before buying more augs for a sleeve
     ['min-aug-batch', 20], // Must be able to afford at least this many augs before we pull the trigger (or fewer if buying all remaining augs)
     ['reserve', null], // Reserve this much cash before determining spending budgets (defaults to contents of reserve.txt if not specified)
-    ['disable-follow-player', false], // Set to true to disable having Sleeve 0 work for the same faction/company as the player to boost re
+    ['disable-follow-player', false], // Set to true to disable having Sleeve 0 work for the same faction/company as the player to boost reputation gain rates
     ['disable-training', false], // Set to true to disable having sleeves workout at the gym (costs money)
     ['train-to-strength', 105], // Sleeves will go to the gym until they reach this much Str
     ['train-to-defense', 105], // Sleeves will go to the gym until they reach this much Def
@@ -28,6 +28,7 @@ const argsSchema = [
     ['train-to-agility', 70], // Sleeves will go to the gym until they reach this much Agi
     ['training-reserve', null], // Defaults to global reserve.txt. Can be set to a negative number to allow debt. Sleeves will not train if money is below this amount.
     ['disable-spending-hashes-for-gym-upgrades', false], // Set to true to disable spending hashes on gym upgrades when training up sleeves.
+    ['enable-bladeburner-team-building', false], // Set to true to have one sleeve support the main sleeve, and another do recruitment. Otherwise, they will just do more "Infiltrate Synthoids"
 ];
 
 export function autocomplete(data, _) {
@@ -197,12 +198,20 @@ async function pickSleeveTask(ns, playerInfo, i, sleeve, canTrain) {
     // If the player is in bladeburner, and has already unlocked gangs with Karma, generate contracts and operations
     if (playerInfo.inBladeburner && playerInGang) {
         // Hack: Without paying much attention to what's happening in bladeburner, pre-assign a variety of tasks by sleeve index
-        const bbTasks = [/*0*/["Support main sleeve"], /*1*/["Take on contracts", "Retirement"],
-            /*2*/["Take on contracts", "Bounty Hunter"], /*3*/["Take on contracts", "Tracking"], /*4*/["Infiltrate synthoids"],
-            /*5*/["Diplomacy"], /*6*/["Field Analysis"], /*7*/["Recruitment"]];
-        let [action, contractName] = bladeburnerCityChaos > 50 ? ["Diplomacy"] : bbTasks[i];
+        const bbTasks = [
+            // Note: Sleeve 0 might still be used for faction work (unless --disable-follow-player is set), so don't assign them a 'unique' task
+            /*0*/options['enable-bladeburner-team-building'] ? ["Support main sleeve"] : ["Infiltrate synthoids"],
+            // Note: Each contract type can only be performed by one sleeve at a time (similar to working for factions)
+            /*1*/["Take on contracts", "Retirement"], /*2*/["Take on contracts", "Bounty Hunter"], /*3*/["Take on contracts", "Tracking"],
+            // Other bladeburner work can be duplicated, but tackling a variety is probably useful. Overrides occur below
+            /*4*/["Infiltrate synthoids"], /*5*/["Diplomacy"], /*6*/["Field Analysis"],
+            /*7*/options['enable-bladeburner-team-building'] ? ["Recruitment"] : ["Infiltrate synthoids"]
+        ];
+        let [action, contractName] = bbTasks[i];
         // If the sleeve is performing an action with a chance of failure, fallback to another task
-        if (sleeve.location.includes("%") && !sleeve.location.includes("100%"))
+        // TODO: We've lost a way to detect sleeve chance, need to look for a new way
+        //if (sleeve.location.includes("%") && !sleeve.location.includes("100%"))
+        if (sleeve.hp.current != sleeve.hp.max) // Assume if HP is not at max, they have started failing this task
             bladeburnerTaskFailed[i] = Date.now(); // If not, don't re-attempt this assignment for a while
         // As current city chaos gets progressively bad, assign more and more sleeves to Diplomacy to help get it under control
         if (bladeburnerCityChaos > (10 - i) * 10) // Later sleeves are first to get assigned, sleeve 0 is last at 100 chaos.
@@ -219,7 +228,7 @@ async function pickSleeveTask(ns, playerInfo, i, sleeve, canTrain) {
     return [`commit ${crime} `, `ns.sleeve.setToCommitCrime(ns.args[0], ns.args[1])`, [i, crime],
     /*   */ `committing ${crime} with chance ${((await calculateCrimeChance(ns, sleeve, crime)) * 100).toFixed(2)}% ` +
     /*   */ (options.crime || crime == "homicide" ? '' : // If auto-criming, user may be curious how close we are to switching to homicide 
-    /*   */     ` (Note: Homicide chance would be ${((await calculateCrimeChance(ns, sleeve, "homicide")) * 100).toFixed(2)}% `)];
+    /*   */     ` (Note: Homicide chance would be ${((await calculateCrimeChance(ns, sleeve, "homicide")) * 100).toFixed(2)}%)`)];
 }
 
 /** Sets a sleeve to its designated task, with some extra error handling logic for working for factions. 
